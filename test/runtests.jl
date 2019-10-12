@@ -1,6 +1,6 @@
 using CuTextures
 using Test
 
-@testset "CuTextures.jl" begin
-    # Write your own tests here.
+@testset "CuTextures.jl" begin    
+    t = CuTextureMemory{Float32, 2}((32, 32))
 end
