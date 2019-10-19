@@ -2,5 +2,6 @@ using CuTextures
 using Test
 
 @testset "CuTextures.jl" begin    
-    t = CuTextureMemory{Float32, 2}((32, 32))
+    tm = CuTextureMemory{Float32, 2}((32, 32))
+    t = CuTexture{Float32, 2}(tm)
 end
