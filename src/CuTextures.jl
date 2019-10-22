@@ -1,11 +1,11 @@
 module CuTextures
 
-export CuTextureMemory, cutexture_eltype_alias, CuTexture
+export CuTextureMemory, CuTexture, CuDeviceTexture
 
 import CUDAnative # TODO: handle CUDA context creation. This is just to create a context already (?)
 import CUDAdrv
 import CUDAdrv: cuArray3DCreate, CUarray, CUarray_format, CUDA_ARRAY3D_DESCRIPTOR, cuArrayDestroy
-
+import Adapt
 
 const _type_to_cuarrayformat_dict = Dict{DataType,CUarray_format}(
     UInt8 => CUDAdrv.CU_AD_FORMAT_UNSIGNED_INT8,
@@ -22,17 +22,13 @@ _type_to_cuarrayformat(::Type{T}) where T = @error "Julia type `$T` does not map
 for (type, cuarrayformat) in _type_to_cuarrayformat_dict
     @eval @inline _type_to_cuarrayformat(::Type{$type}) = $cuarrayformat
 end
-cutexture_eltype_alias(::Type{T}) where T = @error "Julia type `$T` does not have an alias type that can be used as the CUDA texture element type"
-for (type, _) in _type_to_cuarrayformat_dict
-    @eval @inline cutexture_eltype_alias(::Type{$type}) = $type
-end
 
 mutable struct CuTextureMemory{T,N}
     handle::CUarray
     dims::Dims{N}
     
     function CuTextureMemory{T,N}(dims::Dims{N}) where {T, N}
-        format = _type_to_cuarrayformat(cutexture_eltype_alias(T))
+        format = _type_to_cuarrayformat(T)
         num_channels = 1 # TODO enable 1 to 4 channels for NTuple{N,T}-like types
         if N == 2
             width, height = dims
@@ -58,7 +54,7 @@ mutable struct CuTextureMemory{T,N}
             "CUDA arrays (texture memory) can only have 1, 2 or 3 dimensions"
         end
         
-        allocateArray_ref = Ref(CUDAdrv.CUDA_ARRAY3D_DESCRIPTOR(
+        allocateArray_ref = Ref(CUDA_ARRAY3D_DESCRIPTOR(
             width, # Width::Csize_t
             height, # Height::Csize_t
             depth, # Depth::Csize_t
@@ -141,5 +137,40 @@ function unsafe_free!(t::CuTexture)
     end
     return nothing
 end
+
+
+
+struct CuDeviceTexture{T,N}
+    handle::CUtexObject
+end
+
+Adapt.adapt_storage(::CUDAnative.Adaptor, t::CuTexture{T,N}) where {T,N} = CuDeviceTexture{T,N}(t.handle)
+
+
+@inline function tex1d(texObject::Int64, x::Float32)::Tuple{Float32,Float32,Float32,Float32}
+    Base.llvmcall(("declare [4 x float] @llvm.nvvm.tex.unified.1d.v4f32.f32(i64, float)",
+        "%4 =  call [4 x float] @llvm.nvvm.tex.unified.2d.v4f32.f32(i64 %0, float %1)\nret [4 x float] %4"),
+        Tuple{Float32,Float32,Float32,Float32},
+        Tuple{Int64,Float32}, texObject, x)
+end
+@inline function tex2d(texObject::Int64, x::Float32, y::Float32)::Tuple{Float32,Float32,Float32,Float32}
+    Base.llvmcall(("declare [4 x float] @llvm.nvvm.tex.unified.2d.v4f32.f32(i64, float, float)",
+        "%4 =  call [4 x float] @llvm.nvvm.tex.unified.2d.v4f32.f32(i64 %0, float %1, float %2)\nret [4 x float] %4"),
+        Tuple{Float32,Float32,Float32,Float32},
+        Tuple{Int64,Float32,Float32}, texObject, x, y)
+end
+@inline function tex3d(texObject::Int64, x::Float32, y::Float32, z::Float32)::Tuple{Float32,Float32,Float32,Float32}
+    Base.llvmcall(("declare [4 x float] @llvm.nvvm.tex.unified.3d.v4f32.f32(i64, float, float, float)",
+        "%4 =  call [4 x float] @llvm.nvvm.tex.unified.2d.v4f32.f32(i64 %0, float %1, float %2, float %3)\nret [4 x float] %4"),
+        Tuple{Float32,Float32,Float32,Float32},
+        Tuple{Int64,Float32,Float32,Float32}, texObject, x, y, z)
+end
+
+Base.getindex(t::CuDeviceTexture{T,1}, x::Real) where {T} = tex2d(convert(Int64, t.handle), convert(Float32, x))
+Base.getindex(t::CuDeviceTexture{T,2}, x::Real, y::Real) where {T} = tex2d(convert(Int64, t.handle), convert(Float32, x), convert(Float32, y))
+Base.getindex(t::CuDeviceTexture{T,3}, x::Real, y::Real, z::Real) where {T} = tex2d(convert(Int64, t.handle), convert(Float32, x), convert(Float32, y), convert(Float32, z))
+
+
+
 
 end # module
