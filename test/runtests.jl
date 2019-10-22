@@ -1,16 +1,26 @@
 using CuTextures
 using Test
 
-tm = CuTextureMemory{Float32, 2}((32, 32))
+th,tw = 32, 32
+tm = CuTextureMemory{Float32, 2}((th,tw))
 t = CuTexture{Float32, 2}(tm)
 
 
 
-using CUDAnative
 using CuArrays
 
+
+a = convert(Array{Float32}, repeat(1:th, 1, tw) + repeat(0.001 * (1:tw)', th, 1))
+d_a = CuArray(a)
+copyto!(tm, d_a)
+
+
 h, w = 10, 30
-d_a = CuArray{Float32}(undef, h, w)
+d_b = CuArray{Float32}(undef, h, w)
+
+
+
+using CUDAnative
 
 function kernel_texture_warp_native(texture, dst, h, w)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
@@ -20,6 +30,7 @@ function kernel_texture_warp_native(texture, dst, h, w)
     dst[i,j] = texture[u, v][1];
     return nothing
 end
-@cuda threads = (h, w) kernel_texture_warp_native(t, d_a, Float32(h), Float32(w))
+@cuda threads = (h, w) kernel_texture_warp_native(t, d_b, Float32(h), Float32(w))
 
+d_b
 

@@ -6,6 +6,12 @@ import CUDAnative # TODO: handle CUDA context creation. This is just to create a
 import CUDAdrv
 import CUDAdrv: cuArray3DCreate, CUarray, CUarray_format, CUDA_ARRAY3D_DESCRIPTOR, cuArrayDestroy
 import Adapt
+import CuArrays: CuArray
+
+
+
+################## CuTextureMemory
+
 
 const _type_to_cuarrayformat_dict = Dict{DataType,CUarray_format}(
     UInt8 => CUDAdrv.CU_AD_FORMAT_UNSIGNED_INT8,
@@ -81,6 +87,8 @@ function unsafe_free!(t::CuTextureMemory)
 end
 
 
+################## CuTexture
+
 import CUDAdrv: CUtexObject, cuTexObjectCreate, cuTexObjectDestroy, 
                 CUDA_RESOURCE_DESC, CUDA_TEXTURE_DESC, CUDA_RESOURCE_VIEW_DESC,
                 CU_RESOURCE_TYPE_ARRAY, CU_TR_ADDRESS_MODE_BORDER, CU_TR_FILTER_MODE_LINEAR,
@@ -138,7 +146,7 @@ function unsafe_free!(t::CuTexture)
     return nothing
 end
 
-
+################## CuDeviceTexture
 
 struct CuDeviceTexture{T,N}
     handle::CUtexObject
@@ -171,6 +179,36 @@ Base.getindex(t::CuDeviceTexture{T,2}, x::Real, y::Real) where {T} = tex2d(conve
 Base.getindex(t::CuDeviceTexture{T,3}, x::Real, y::Real, z::Real) where {T} = tex2d(convert(Int64, t.handle), convert(Float32, x), convert(Float32, y), convert(Float32, z))
 
 
+
+################## mem transfer
+
+import CUDAdrv: cuMemcpy2D, CUDA_MEMCPY2D
+
+Base.size(tm::CuTextureMemory) = tm.dims
+
+function Base.copyto!(dst::CuTextureMemory{T,2}, src::CuArray{T,2}) where {T,N}
+    @assert dst.dims == size(src) "CuTextureMemory and CuArray sizes must match"
+    copy_ref = Ref(CUDA_MEMCPY2D(
+        0, # srcXInBytes::Csize_t
+        0, # srcY::Csize_t
+        CUDAdrv.CU_MEMORYTYPE_DEVICE, # srcMemoryType::CUmemorytype
+        0, # srcHost::Ptr{Cvoid}
+        view(src.buf, src.offset), # srcDevice::CUdeviceptr
+        0, # srcArray::CUarray
+        0, # srcPitch::Csize_t
+        0, # dstXInBytes::Csize_t
+        0, # dstY::Csize_t
+        CUDAdrv.CU_MEMORYTYPE_ARRAY, # dstMemoryType::CUmemorytype
+        0, # dstHost::Ptr{Cvoid}
+        0, # dstDevice::CUdeviceptr
+        dst.handle, # dstArray::CUarray
+        0, # dstPitch::Csize_t
+        dst.dims[1] * sizeof(T), # WidthInBytes::Csize_t
+        dst.dims[2], # Height::Csize_t
+    ))
+    cuMemcpy2D(copy_ref)
+    return dst
+end
 
 
 end # module
