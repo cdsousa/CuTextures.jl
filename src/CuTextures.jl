@@ -1,6 +1,6 @@
 module CuTextures
 
-export CuTextureMemory, CuTexture, CuDeviceTexture
+export CuTextureArray, CuTexture, CuDeviceTexture
 
 import CUDAnative # TODO: handle CUDA context creation. This is just to create a context already (?)
 import CUDAdrv
@@ -10,7 +10,7 @@ import CuArrays: CuArray
 
 
 
-################## CuTextureMemory
+################## CuTextureArray
 
 
 const _type_to_cuarrayformat_dict = Dict{DataType,CUarray_format}(
@@ -29,11 +29,12 @@ for (type, cuarrayformat) in _type_to_cuarrayformat_dict
     @eval @inline _type_to_cuarrayformat(::Type{$type}) = $cuarrayformat
 end
 
-mutable struct CuTextureMemory{T,N}
+mutable struct CuTextureArray{T,N}
     handle::CUarray
     dims::Dims{N}
+    # TODO: hold the CUDA context here so that it is not finalized before this object
     
-    function CuTextureMemory{T,N}(dims::Dims{N}) where {T, N}
+    function CuTextureArray{T,N}(dims::Dims{N}) where {T, N}
         format = _type_to_cuarrayformat(T)
         num_channels = 1 # TODO enable 1 to 4 channels for NTuple{N,T}-like types
         if N == 2
@@ -78,7 +79,7 @@ mutable struct CuTextureMemory{T,N}
     end
 end
 
-function unsafe_free!(t::CuTextureMemory)
+function unsafe_free!(t::CuTextureArray)
     if t.handle != C_NULL
         cuArrayDestroy(t.handle)
         t.handle = C_NULL
@@ -86,6 +87,9 @@ function unsafe_free!(t::CuTextureMemory)
     return nothing
 end
 
+CuTextureArray{T}(n::Int) where {T} = CuTextureArray{T,1}((n,))
+CuTextureArray{T}(nx::Int, ny::Int) where {T} = CuTextureArray{T,2}((nx,ny))
+CuTextureArray{T}(nx::Int, ny::Int, nz::Int) where {T} = CuTextureArray{T,3}((nx,ny,nz))
 
 ################## CuTexture
 
@@ -94,15 +98,15 @@ import CUDAdrv: CUtexObject, cuTexObjectCreate, cuTexObjectDestroy,
                 CU_RESOURCE_TYPE_ARRAY, CU_TR_ADDRESS_MODE_BORDER, CU_TR_FILTER_MODE_LINEAR,
                 CU_TRSF_NORMALIZED_COORDINATES
 
-mutable struct CuTexture{T,N}
-    mem::CuTextureMemory{T,N}
+mutable struct CuTexture{T,N,Mem}
+    mem::Mem
     handle::CUtexObject
 
-    function CuTexture{T,N}(texmem::CuTextureMemory{T,N}) where {T,N}
+    function CuTexture{T,N,Mem}(texarr::Mem) where {T,N,Mem<:CuTextureArray{T,N}}
     
         # #### TODO: use CUDAdrv wrapped struct when its padding becomes fixed
         # res = Ref{CUDAdrv.ANONYMOUS1_res}()
-        # unsafe_store!(Ptr{CUarray}(pointer_from_objref(res)), texmem.handle)
+        # unsafe_store!(Ptr{CUarray}(pointer_from_objref(res)), texarr.handle)
         # resDesc_ref = Ref(CUDA_RESOURCE_DESC(
         #     CU_RESOURCE_TYPE_ARRAY, # resType::CUresourcetype
         #     res[], # res::ANONYMOUS1_res
@@ -110,7 +114,7 @@ mutable struct CuTexture{T,N}
         # ))
         resDesc_ref = Ref((
             CU_RESOURCE_TYPE_ARRAY, # resType::CUresourcetype
-            texmem.handle, # 1 x UInt64
+            texarr.handle, # 1 x UInt64
             ntuple(_->Int64(0), 15), # 15 x UInt64
             UInt32(0) # flags::UInt32
         ))
@@ -132,7 +136,7 @@ mutable struct CuTexture{T,N}
         texObject_ref = Ref{CUtexObject}(0)
         cuTexObjectCreate(texObject_ref, resDesc_ref, texDesc_ref, C_NULL)
 
-        t = new{T,N}(texmem, texObject_ref[])
+        t = new{T,N,Mem}(texarr, texObject_ref[])
         finalizer(unsafe_free!, t)
         return t
     end
@@ -145,6 +149,44 @@ function unsafe_free!(t::CuTexture)
     end
     return nothing
 end
+
+
+CuTexture(texarr::CuTextureArray{T,N}) where {T,N} = CuTexture{T,N,CuTextureArray{T,N}}(texarr)
+CuTexture{T}(n::Int) where {T} = CuTexture(CuTextureArray{T,1}((n,)))
+CuTexture{T}(nx::Int, ny::Int) where {T} = CuTexture(CuTextureArray{T,2}((nx,ny)))
+CuTexture{T}(nx::Int, ny::Int, nz::Int) where {T} = CuTexture(CuTextureArray{T,3}((nx,ny,nz)))
+
+
+## mem transfer
+
+import CUDAdrv: cuMemcpy2D, CUDA_MEMCPY2D
+
+Base.size(tm::CuTextureArray) = tm.dims
+
+function Base.copyto!(dst::CuTextureArray{T,2}, src::CuArray{T,2}) where {T}
+    @assert dst.dims == size(src) "CuTextureArray and CuArray sizes must match"
+    copy_ref = Ref(CUDA_MEMCPY2D(
+        0, # srcXInBytes::Csize_t
+        0, # srcY::Csize_t
+        CUDAdrv.CU_MEMORYTYPE_DEVICE, # srcMemoryType::CUmemorytype
+        0, # srcHost::Ptr{Cvoid}
+        view(src.buf, src.offset), # srcDevice::CUdeviceptr
+        0, # srcArray::CUarray
+        0, # srcPitch::Csize_t
+        0, # dstXInBytes::Csize_t
+        0, # dstY::Csize_t
+        CUDAdrv.CU_MEMORYTYPE_ARRAY, # dstMemoryType::CUmemorytype
+        0, # dstHost::Ptr{Cvoid}
+        0, # dstDevice::CUdeviceptr
+        dst.handle, # dstArray::CUarray
+        0, # dstPitch::Csize_t
+        dst.dims[1] * sizeof(T), # WidthInBytes::Csize_t
+        dst.dims[2], # Height::Csize_t
+    ))
+    cuMemcpy2D(copy_ref)
+    return dst
+end
+
 
 ################## CuDeviceTexture
 
@@ -179,36 +221,8 @@ Base.getindex(t::CuDeviceTexture{T,2}, x::Real, y::Real) where {T} = tex2d(conve
 Base.getindex(t::CuDeviceTexture{T,3}, x::Real, y::Real, z::Real) where {T} = tex2d(convert(Int64, t.handle), convert(Float32, x), convert(Float32, y), convert(Float32, z))
 
 
-
-################## mem transfer
-
-import CUDAdrv: cuMemcpy2D, CUDA_MEMCPY2D
-
-Base.size(tm::CuTextureMemory) = tm.dims
-
-function Base.copyto!(dst::CuTextureMemory{T,2}, src::CuArray{T,2}) where {T,N}
-    @assert dst.dims == size(src) "CuTextureMemory and CuArray sizes must match"
-    copy_ref = Ref(CUDA_MEMCPY2D(
-        0, # srcXInBytes::Csize_t
-        0, # srcY::Csize_t
-        CUDAdrv.CU_MEMORYTYPE_DEVICE, # srcMemoryType::CUmemorytype
-        0, # srcHost::Ptr{Cvoid}
-        view(src.buf, src.offset), # srcDevice::CUdeviceptr
-        0, # srcArray::CUarray
-        0, # srcPitch::Csize_t
-        0, # dstXInBytes::Csize_t
-        0, # dstY::Csize_t
-        CUDAdrv.CU_MEMORYTYPE_ARRAY, # dstMemoryType::CUmemorytype
-        0, # dstHost::Ptr{Cvoid}
-        0, # dstDevice::CUdeviceptr
-        dst.handle, # dstArray::CUarray
-        0, # dstPitch::Csize_t
-        dst.dims[1] * sizeof(T), # WidthInBytes::Csize_t
-        dst.dims[2], # Height::Csize_t
-    ))
-    cuMemcpy2D(copy_ref)
-    return dst
-end
+Base.copyto!(dst::CuTexture{T,2,CuTextureArray{T,2}}, src::CuArray{T,2}) where {T} = Base.copyto!(dst.mem, src)
+    
 
 
 end # module
