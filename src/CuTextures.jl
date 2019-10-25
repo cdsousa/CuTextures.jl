@@ -36,7 +36,7 @@ mutable struct CuTextureArray{T,N}
     
     function CuTextureArray{T,N}(dims::Dims{N}) where {T, N}
         format = _type_to_cuarrayformat(T)
-        num_channels = 1 # TODO enable 1 to 4 channels for NTuple{N,T}-like types
+        num_channels = UInt(1) # TODO enable 1 to 4 channels for NTuple{N,T}-like types
         if N == 2
             width, height = dims
             depth = 0
@@ -95,29 +95,54 @@ CuTextureArray{T}(nx::Int, ny::Int, nz::Int) where {T} = CuTextureArray{T,3}((nx
 
 import CUDAdrv: CUtexObject, cuTexObjectCreate, cuTexObjectDestroy, 
                 CUDA_RESOURCE_DESC, CUDA_TEXTURE_DESC, CUDA_RESOURCE_VIEW_DESC,
-                CU_RESOURCE_TYPE_ARRAY, CU_TR_ADDRESS_MODE_BORDER, CU_TR_FILTER_MODE_LINEAR,
+                CU_RESOURCE_TYPE_ARRAY, CU_RESOURCE_TYPE_LINEAR, CU_RESOURCE_TYPE_PITCH2D,
+                CU_TR_ADDRESS_MODE_BORDER, CU_TR_FILTER_MODE_LINEAR,
                 CU_TRSF_NORMALIZED_COORDINATES
+
+function _construct_CUDA_RESOURCE_DESC(texarr::CuTextureArray{T,N}) where {T,N}
+    # #### TODO: use CUDAdrv wrapped struct when its padding becomes fixed
+    # res = Ref{CUDAdrv.ANONYMOUS1_res}()
+    # unsafe_store!(Ptr{CUarray}(pointer_from_objref(res)), texarr.handle)
+    # resDesc_ref = Ref(CUDA_RESOURCE_DESC(
+    #     CU_RESOURCE_TYPE_ARRAY, # resType::CUresourcetype
+    #     res[], # res::ANONYMOUS1_res
+    #     0 # flags::UInt32
+    # ))
+    resDesc_ref = Ref((
+        CU_RESOURCE_TYPE_ARRAY, # resType::CUresourcetype
+        texarr.handle, # 1 x UInt64
+        ntuple(_->Int64(0), 15), # 15 x UInt64
+        UInt32(0) # flags::UInt32
+    ))
+    return resDesc_ref
+end
+
+function _construct_CUDA_RESOURCE_DESC(arr::CuArray{T,N}) where {T,N}
+    @assert 1 <= N <= 2 "Only 1D or 2D (dimension) CuArray objects can be wrapped in a texture"
+    format = _type_to_cuarrayformat(T)
+    num_channels = 1
+    # #### TODO: use CUDAdrv wrapped struct when its padding becomes fixed
+    resDesc_ref = Ref((
+        (N == 1 ? CU_RESOURCE_TYPE_LINEAR : CU_RESOURCE_TYPE_PITCH2D), # resType::CUresourcetype
+        arr.buf.ptr, # 1 x UInt64 (CUdeviceptr)
+        format, # 1/2 x UInt64 (CUarray_format)
+        UInt32(num_channels), # 1/2 x UInt64
+        size(arr,1), # 1 x UInt64 nx
+        (N == 2 ? size(arr,2) : 0), # 1 x UInt64 ny
+        (N == 2 ? size(arr,2) * sizeof(T) : 0), # 1 x UInt64 pitch
+        ntuple(_->Int64(0), 11), # 10 x UInt64
+        UInt32(0) # flags::UInt32
+    ))
+    return resDesc_ref
+end
 
 mutable struct CuTexture{T,N,Mem}
     mem::Mem
     handle::CUtexObject
 
-    function CuTexture{T,N,Mem}(texarr::Mem) where {T,N,Mem<:CuTextureArray{T,N}}
+    function CuTexture{T,N,Mem}(texmemory::Mem) where {T,N,Mem}
     
-        # #### TODO: use CUDAdrv wrapped struct when its padding becomes fixed
-        # res = Ref{CUDAdrv.ANONYMOUS1_res}()
-        # unsafe_store!(Ptr{CUarray}(pointer_from_objref(res)), texarr.handle)
-        # resDesc_ref = Ref(CUDA_RESOURCE_DESC(
-        #     CU_RESOURCE_TYPE_ARRAY, # resType::CUresourcetype
-        #     res[], # res::ANONYMOUS1_res
-        #     0 # flags::UInt32
-        # ))
-        resDesc_ref = Ref((
-            CU_RESOURCE_TYPE_ARRAY, # resType::CUresourcetype
-            texarr.handle, # 1 x UInt64
-            ntuple(_->Int64(0), 15), # 15 x UInt64
-            UInt32(0) # flags::UInt32
-        ))
+        resDesc_ref = _construct_CUDA_RESOURCE_DESC(texmemory)
         resDesc_ref = pointer_from_objref(resDesc_ref)
         
         texDesc_ref = Ref(CUDA_TEXTURE_DESC(
@@ -136,7 +161,7 @@ mutable struct CuTexture{T,N,Mem}
         texObject_ref = Ref{CUtexObject}(0)
         cuTexObjectCreate(texObject_ref, resDesc_ref, texDesc_ref, C_NULL)
 
-        t = new{T,N,Mem}(texarr, texObject_ref[])
+        t = new{T,N,Mem}(texmemory, texObject_ref[])
         finalizer(unsafe_free!, t)
         return t
     end
@@ -155,9 +180,10 @@ CuTexture(texarr::CuTextureArray{T,N}) where {T,N} = CuTexture{T,N,CuTextureArra
 CuTexture{T}(n::Int) where {T} = CuTexture(CuTextureArray{T,1}((n,)))
 CuTexture{T}(nx::Int, ny::Int) where {T} = CuTexture(CuTextureArray{T,2}((nx,ny)))
 CuTexture{T}(nx::Int, ny::Int, nz::Int) where {T} = CuTexture(CuTextureArray{T,3}((nx,ny,nz)))
+CuTexture(cuarr::CuArray{T,N}) where {T,N} = CuTexture{T,N,CuArray{T,N}}(cuarr)
 
-
-## mem transfer
+### mem transfer
+# TODO: copy from 1D and 3D memory, mem copy from host memory
 
 import CUDAdrv: cuMemcpy2D, CUDA_MEMCPY2D
 
@@ -186,6 +212,7 @@ function Base.copyto!(dst::CuTextureArray{T,2}, src::CuArray{T,2}) where {T}
     cuMemcpy2D(copy_ref)
     return dst
 end
+
 
 
 ################## CuDeviceTexture

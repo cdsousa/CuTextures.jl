@@ -15,8 +15,12 @@ a = convert(Array{Float32}, repeat(1:th, 1, tw) + repeat(0.001 * (1:tw)', th, 1)
 d_a = CuArray(a)
 
 
-tex = CuTexture{Float32}(th,tw)
-copyto!(tex, d_a)
+tex1 = CuTexture{Float32}(th,tw)
+copyto!(tex1, d_a)
+
+tex2 = CuTexture(d_a)
+
+tex = tex2
 
 
 h, w = 10, 30
