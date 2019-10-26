@@ -96,7 +96,7 @@ CuTextureArray{T}(nx::Int, ny::Int, nz::Int) where {T} = CuTextureArray{T,3}((nx
 import CUDAdrv: CUtexObject, cuTexObjectCreate, cuTexObjectDestroy, 
                 CUDA_RESOURCE_DESC, CUDA_TEXTURE_DESC, CUDA_RESOURCE_VIEW_DESC,
                 CU_RESOURCE_TYPE_ARRAY, CU_RESOURCE_TYPE_LINEAR, CU_RESOURCE_TYPE_PITCH2D,
-                CU_TR_ADDRESS_MODE_BORDER, CU_TR_FILTER_MODE_LINEAR,
+                CU_TR_ADDRESS_MODE_BORDER, CU_TR_ADDRESS_MODE_CLAMP, CU_TR_FILTER_MODE_LINEAR,
                 CU_TRSF_NORMALIZED_COORDINATES
 
 function _construct_CUDA_RESOURCE_DESC(texarr::CuTextureArray{T,N}) where {T,N}
@@ -118,6 +118,7 @@ function _construct_CUDA_RESOURCE_DESC(texarr::CuTextureArray{T,N}) where {T,N}
 end
 
 function _construct_CUDA_RESOURCE_DESC(arr::CuArray{T,N}) where {T,N}
+    # TODO: take care of allowed pitches
     @assert 1 <= N <= 2 "Only 1D or 2D (dimension) CuArray objects can be wrapped in a texture"
     format = _type_to_cuarrayformat(T)
     num_channels = 1
@@ -127,10 +128,10 @@ function _construct_CUDA_RESOURCE_DESC(arr::CuArray{T,N}) where {T,N}
         arr.buf.ptr, # 1 x UInt64 (CUdeviceptr)
         format, # 1/2 x UInt64 (CUarray_format)
         UInt32(num_channels), # 1/2 x UInt64
-        size(arr,1), # 1 x UInt64 nx
+        (N == 2 ? size(arr,1) : size(arr,1) * sizeof(T)), # 1 x UInt64 nx
         (N == 2 ? size(arr,2) : 0), # 1 x UInt64 ny
-        (N == 2 ? size(arr,2) * sizeof(T) : 0), # 1 x UInt64 pitch
-        ntuple(_->Int64(0), 11), # 10 x UInt64
+        (N == 2 ? size(arr,1) * sizeof(T) : 0), # 1 x UInt64 pitch
+        ntuple(_->Int64(0), 11), # 11 x UInt64
         UInt32(0) # flags::UInt32
     ))
     return resDesc_ref
@@ -145,8 +146,9 @@ mutable struct CuTexture{T,N,Mem}
         resDesc_ref = _construct_CUDA_RESOURCE_DESC(texmemory)
         resDesc_ref = pointer_from_objref(resDesc_ref)
         
+        addressMode = N > 1 ? CU_TR_ADDRESS_MODE_BORDER : CU_TR_ADDRESS_MODE_CLAMP
         texDesc_ref = Ref(CUDA_TEXTURE_DESC(
-            ntuple(_->CU_TR_ADDRESS_MODE_BORDER, 3), # addressMode::NTuple{3, CUaddress_mode}
+            ntuple(_->addressMode, 3), # addressMode::NTuple{3, CUaddress_mode}
             CU_TR_FILTER_MODE_LINEAR, # filterMode::CUfilter_mode
             CU_TRSF_NORMALIZED_COORDINATES, # flags::UInt32
             1, # maxAnisotropy::UInt32
@@ -182,12 +184,24 @@ CuTexture{T}(nx::Int, ny::Int) where {T} = CuTexture(CuTextureArray{T,2}((nx,ny)
 CuTexture{T}(nx::Int, ny::Int, nz::Int) where {T} = CuTexture(CuTextureArray{T,3}((nx,ny,nz)))
 CuTexture(cuarr::CuArray{T,N}) where {T,N} = CuTexture{T,N,CuArray{T,N}}(cuarr)
 
-### mem transfer
-# TODO: copy from 1D and 3D memory, mem copy from host memory
 
-import CUDAdrv: cuMemcpy2D, CUDA_MEMCPY2D
+### Memory transfer
 
+# TODO: add support for memory copy directly from host memory
+
+import CUDAdrv: cuMemcpyDtoA, cuMemcpy2D, CUDA_MEMCPY2D, cuMemcpy3D, CUDA_MEMCPY3D
+
+Base.eltype(tm::CuTextureArray{T,N}) where {T,N} = T
 Base.size(tm::CuTextureArray) = tm.dims
+
+Base.eltype(tm::CuTexture{T,N}) where {T,N} = T
+Base.size(tm::CuTexture) = size(tm.mem)
+
+function Base.copyto!(dst::CuTextureArray{T,1}, src::CuArray{T,1}) where {T}
+    @assert dst.dims == size(src) "CuTextureArray and CuArray sizes must match"
+    cuMemcpyDtoA(dst.handle, src.offset, src.buf.ptr, dst.dims[1] * sizeof(T) )
+    return dst
+end
 
 function Base.copyto!(dst::CuTextureArray{T,2}, src::CuArray{T,2}) where {T}
     @assert dst.dims == size(src) "CuTextureArray and CuArray sizes must match"
@@ -198,7 +212,7 @@ function Base.copyto!(dst::CuTextureArray{T,2}, src::CuArray{T,2}) where {T}
         0, # srcHost::Ptr{Cvoid}
         view(src.buf, src.offset), # srcDevice::CUdeviceptr
         0, # srcArray::CUarray
-        0, # srcPitch::Csize_t
+        0, # srcPitch::Csize_t ### TODO: check why this cannot be `size(src.dims, 1) * sizeof(T)` as it should
         0, # dstXInBytes::Csize_t
         0, # dstY::Csize_t
         CUDAdrv.CU_MEMORYTYPE_ARRAY, # dstMemoryType::CUmemorytype
@@ -213,7 +227,38 @@ function Base.copyto!(dst::CuTextureArray{T,2}, src::CuArray{T,2}) where {T}
     return dst
 end
 
-
+function Base.copyto!(dst::CuTextureArray{T,3}, src::CuArray{T,3}) where {T}
+    @assert dst.dims == size(src) "CuTextureArray and CuArray sizes must match"
+    copy_ref = Ref(CUDA_MEMCPY3D(
+        0, # srcXInBytes::Csize_t
+        0, # srcY::Csize_t
+        0, # srcZ::Csize_t
+        0, # srcLOD::Csize_t
+        CUDAdrv.CU_MEMORYTYPE_DEVICE, # srcMemoryType::CUmemorytype
+        0, # srcHost::Ptr{Cvoid}
+        view(src.buf, src.offset), # srcDevice::CUdeviceptr
+        0, # srcArray::CUarray
+        0, # reserved0::Ptr{Cvoid}
+        size(src, 1) * sizeof(T), # srcPitch::Csize_t
+        size(src, 2), # srcHeight::Csize_t
+        0, # dstXInBytes::Csize_t
+        0, # dstY::Csize_t
+        0, # dstZ::Csize_t
+        0, # dstLOD::Csize_t
+        CUDAdrv.CU_MEMORYTYPE_ARRAY, # dstMemoryType::CUmemorytype
+        0, # dstHost::Ptr{Cvoid}
+        0, # dstDevice::CUdeviceptr
+        dst.handle, # dstArray::CUarray
+        0, # reserved1::Ptr{Cvoid}
+        0, # dstPitch::Csize_t
+        0, # dstHeight::Csize_t
+        dst.dims[1] * sizeof(T), # WidthInBytes::Csize_t
+        dst.dims[2], # Height::Csize_t
+        dst.dims[3], # Depth::Csize_t
+    ))
+    cuMemcpy3D(copy_ref)
+    return dst
+end
 
 ################## CuDeviceTexture
 
@@ -223,10 +268,9 @@ end
 
 Adapt.adapt_storage(::CUDAnative.Adaptor, t::CuTexture{T,N}) where {T,N} = CuDeviceTexture{T,N}(t.handle)
 
-
 @inline function tex1d(texObject::Int64, x::Float32)::Tuple{Float32,Float32,Float32,Float32}
     Base.llvmcall(("declare [4 x float] @llvm.nvvm.tex.unified.1d.v4f32.f32(i64, float)",
-        "%4 =  call [4 x float] @llvm.nvvm.tex.unified.2d.v4f32.f32(i64 %0, float %1)\nret [4 x float] %4"),
+        "%3 =  call [4 x float] @llvm.nvvm.tex.unified.1d.v4f32.f32(i64 %0, float %1)\nret [4 x float] %3"),
         Tuple{Float32,Float32,Float32,Float32},
         Tuple{Int64,Float32}, texObject, x)
 end
@@ -238,18 +282,14 @@ end
 end
 @inline function tex3d(texObject::Int64, x::Float32, y::Float32, z::Float32)::Tuple{Float32,Float32,Float32,Float32}
     Base.llvmcall(("declare [4 x float] @llvm.nvvm.tex.unified.3d.v4f32.f32(i64, float, float, float)",
-        "%4 =  call [4 x float] @llvm.nvvm.tex.unified.2d.v4f32.f32(i64 %0, float %1, float %2, float %3)\nret [4 x float] %4"),
+        "%5 =  call [4 x float] @llvm.nvvm.tex.unified.3d.v4f32.f32(i64 %0, float %1, float %2, float %3)\nret [4 x float] %5"),
         Tuple{Float32,Float32,Float32,Float32},
         Tuple{Int64,Float32,Float32,Float32}, texObject, x, y, z)
 end
 
-Base.getindex(t::CuDeviceTexture{T,1}, x::Real) where {T} = tex2d(convert(Int64, t.handle), convert(Float32, x))
+Base.getindex(t::CuDeviceTexture{T,1}, x::Real) where {T} = tex1d(convert(Int64, t.handle), convert(Float32, x))
 Base.getindex(t::CuDeviceTexture{T,2}, x::Real, y::Real) where {T} = tex2d(convert(Int64, t.handle), convert(Float32, x), convert(Float32, y))
-Base.getindex(t::CuDeviceTexture{T,3}, x::Real, y::Real, z::Real) where {T} = tex2d(convert(Int64, t.handle), convert(Float32, x), convert(Float32, y), convert(Float32, z))
-
-
-Base.copyto!(dst::CuTexture{T,2,CuTextureArray{T,2}}, src::CuArray{T,2}) where {T} = Base.copyto!(dst.mem, src)
-    
+Base.getindex(t::CuDeviceTexture{T,3}, x::Real, y::Real, z::Real) where {T} = tex3d(convert(Int64, t.handle), convert(Float32, x), convert(Float32, y), convert(Float32, z))
 
 
 end # module
