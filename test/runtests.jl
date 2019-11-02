@@ -13,26 +13,28 @@ using Test
 end
 function kernel_texture_warp_native(dst::CuDeviceArray{T,1}, texture::CuDeviceTexture{T,1}, h) where {T}
     i, u = calcpoint(blockIdx().x, blockDim().x, threadIdx().x, h)
-    dst[i] = texture[u];
+    @inbounds dst[i] = texture[u];
     return nothing
 end
 function kernel_texture_warp_native(dst::CuDeviceArray{T,2}, texture::CuDeviceTexture{T,2}, h, w) where {T}
     i, u = calcpoint(blockIdx().x, blockDim().x, threadIdx().x, h)
     j, v = calcpoint(blockIdx().y, blockDim().y, threadIdx().y, w)
-    dst[i,j] = texture[u,v];
+    @inbounds dst[i,j] = texture[u,v];
     return nothing
 end
 function kernel_texture_warp_native(dst::CuDeviceArray{T,3}, texture::CuDeviceTexture{T,3}, h, w, d) where {T}
     i, u = calcpoint(blockIdx().x, blockDim().x, threadIdx().x, h)
     j, v = calcpoint(blockIdx().y, blockDim().y, threadIdx().y, w)
     k, w = calcpoint(blockIdx().z, blockDim().z, threadIdx().z, d)
-    dst[i,j,k] = texture[u,v,w];
+    @inbounds dst[i,j,k] = texture[u,v,w];
     return nothing
 end
 
 function fetch_all(texture)
     dims = size(texture)
     d_out = CuArray{eltype(texture)}(undef, dims...)
+    # @device_code_warntype @cuda threads = dims kernel_texture_warp_native(d_out, texture, Float32.(dims)...)
+    # @device_code_llvm @cuda threads = dims kernel_texture_warp_native(d_out, texture, Float32.(dims)...)
     @cuda threads = dims kernel_texture_warp_native(d_out, texture, Float32.(dims)...)
     d_out
 end
@@ -82,8 +84,8 @@ end
 
 @testset "All CUDA types" begin
 
-    for T in (Int32,UInt32,Int16,UInt16,Int8,UInt8,Float32,Float16)
-        testheight, testwidth, testdepth = 32,32, 4
+    for T in (Int32, UInt32, Int16, UInt16, Int8, UInt8, Float32, Float16)
+        testheight, testwidth, testdepth = 32, 32, 4
         a2D = rand(T, testheight, testwidth)
         d_a2D = CuArray(a2D)
 
@@ -96,4 +98,26 @@ end
         @test fetched2D == d_a2D
     end
 
+end
+
+
+
+@testset "Multiple channels" begin
+    testheight, testwidth, testdepth = 16, 16, 4
+    a2D = [(Int32(i), Int32(j)) for i = 1:testheight, j = 1:testwidth]
+    d_a2D = CuArray(a2D)
+    texarr2D = CuTextureArray{eltype(d_a2D)}(size(d_a2D)...)
+    copyto!(texarr2D, d_a2D)
+    tex2D = CuTexture(texarr2D)
+    fetched2D = fetch_all(tex2D)
+    @test fetched2D == d_a2D 
+
+    testheight, testwidth, testdepth = 16, 16, 4
+    a2D = [(Int16(i), Int16(j), Int16(i+j), Int16(i-j)) for i = 1:testheight, j = 1:testwidth]
+    d_a2D = CuArray(a2D)
+    texarr2D = CuTextureArray{eltype(d_a2D)}(size(d_a2D)...)
+    copyto!(texarr2D, d_a2D)
+    tex2D = CuTexture(texarr2D)
+    fetched2D = fetch_all(tex2D)
+    @test fetched2D == d_a2D 
 end

@@ -23,15 +23,31 @@ const _type_to_cuarrayformat_dict = Dict{DataType,CUarray_format}(UInt8 => CUDAd
     Float32 => CUDAdrv.CU_AD_FORMAT_FLOAT,
 )
 
-_type_to_cuarrayformat(::Type{T}) where T = @error "Julia type `$T` does not maps to any \"CUarray_format\""
-for (type, cuarrayformat) in _type_to_cuarrayformat_dict
-    @eval @inline _type_to_cuarrayformat(::Type{$type}) = $cuarrayformat
+@inline _alias_type_to_nchan_and_eltype(::Type{NTuple{N,T}}) where {N,T} = @error "Julia type `$T` (from `NTuple{$N,$T}`) does not have an alias to a \"CUDA array\" (texture memory) format"
+@inline _alias_type_to_nchan_and_eltype(::Type{T}) where {T} = @error "Julia type `$T` does not have an alias to a \"CUDA array\" (texture memory) format"
+for (T, cuarrayformat) in _type_to_cuarrayformat_dict
+    @eval @inline _alias_type_to_nchan_and_eltype(::Type{$T})  = 1,$T
+    @eval @inline _alias_type_to_nchan_and_eltype(::Type{NTuple{2,$T}}) = 2,$T
+    @eval @inline _alias_type_to_nchan_and_eltype(::Type{NTuple{4,$T}}) = 4,$T
+    @eval @inline _alias_type_to_nchan_and_eltype(::Type{NTuple{N,$T}}) where {N} = @error "\"CUDA arrays\" (texture memory) can have only 1, 2 or 4 channels"
+    @eval @inline _type_to_cuarrayformat(::Type{$T}) = $cuarrayformat
 end
 
-function cuda_alias_type end
-for (type, _) in _type_to_cuarrayformat_dict
-    @eval @inline cuda_alias_type(::Type{$type}) = $type
+
+cuda_texture_alias_type(::Type{T}) where {T} = @error "Type `$T` does not have a defined alias to a \"CUDA array\" (texture memory) format"
+for (T, _) in _type_to_cuarrayformat_dict
+    @eval @inline cuda_texture_alias_type(::Type{$T}) = $T
+    for N in (2,4)
+        @eval @inline cuda_texture_alias_type(::Type{NT}) where {NT<:NTuple{$N, $T}} = NT
+    end
 end
+
+@inline function _cuda_texture_alias_type_with_asserted_size(::Type{T}) where {T}
+    Ta = cuda_texture_alias_type(T)
+    @assert sizeof(Ta) == sizeof(T) "Error in the alias of Julia type `$T` to the \"CUDA array\" (texture memory) format `$Ta`: sizes in bytes do not match"
+    return Ta
+end
+
 
 mutable struct CuTextureArray{T,N}
     handle::CUarray
@@ -39,9 +55,10 @@ mutable struct CuTextureArray{T,N}
     # TODO: hold the CUDA context here so that it is not finalized before this object
     
     function CuTextureArray{T,N}(dims::Dims{N}) where {T,N}
-        Ta = cuda_alias_type(T)
-        format = _type_to_cuarrayformat(Ta)
-        num_channels = UInt(1) # TODO enable 1 to 4 channels for NTuple{N,T}-like types
+        Ta = _cuda_texture_alias_type_with_asserted_size(T)
+        nchan, Te = _alias_type_to_nchan_and_eltype(Ta)
+        num_channels = UInt32(nchan)
+        format = _type_to_cuarrayformat(Te)
         if N == 2
             width, height = dims
             depth = 0
@@ -121,9 +138,10 @@ end
 function _construct_CUDA_RESOURCE_DESC(arr::CuArray{T,N}) where {T,N}
     # TODO: take care of allowed pitches
     @assert 1 <= N <= 2 "Only 1D or 2D (dimension) CuArray objects can be wrapped in a texture"
-    Ta = cuda_alias_type(T)
-    format = _type_to_cuarrayformat(Ta)
-    num_channels = 1
+    Ta = _cuda_texture_alias_type_with_asserted_size(T)
+    nchan, Te = _alias_type_to_nchan_and_eltype(Ta)
+    num_channels = UInt32(nchan)
+    format = _type_to_cuarrayformat(Te)
     # #### TODO: use CUDAdrv wrapped struct when its padding becomes fixed
     resDesc_ref = Ref(((N == 1 ? CU_RESOURCE_TYPE_LINEAR : CU_RESOURCE_TYPE_PITCH2D), # resType::CUresourcetype
         arr.buf.ptr, # 1 x UInt64 (CUdeviceptr)
@@ -142,14 +160,14 @@ mutable struct CuTexture{T,N,Mem}
     handle::CUtexObject
 
     function CuTexture{T,N,Mem}(texmemory::Mem) where {T,N,Mem}
-        Ta = cuda_alias_type(T)
+        nchan, Te = _alias_type_to_nchan_and_eltype(_cuda_texture_alias_type_with_asserted_size(T))
 
         resDesc_ref = _construct_CUDA_RESOURCE_DESC(texmemory)
         resDesc_ref = pointer_from_objref(resDesc_ref)
         
         addressMode = CU_TR_ADDRESS_MODE_CLAMP  # N > 1 ? CU_TR_ADDRESS_MODE_BORDER : CU_TR_ADDRESS_MODE_CLAMP
         flags = CU_TRSF_NORMALIZED_COORDINATES
-        flags = flags | (Ta <: Integer ? CU_TRSF_READ_AS_INTEGER : zero(CU_TRSF_READ_AS_INTEGER))
+        flags = flags | (Te <: Integer ? CU_TRSF_READ_AS_INTEGER : zero(CU_TRSF_READ_AS_INTEGER))
 
         texDesc_ref = Ref(CUDA_TEXTURE_DESC(ntuple(_->addressMode, 3), # addressMode::NTuple{3, CUaddress_mode}
             CU_TR_FILTER_MODE_LINEAR, # filterMode::CUfilter_mode
@@ -159,7 +177,7 @@ mutable struct CuTexture{T,N,Mem}
             0, # mipmapLevelBias::Cfloat
             0, # minMipmapLevelClamp::Cfloat
             0, # maxMipmapLevelClamp::Cfloat
-            ntuple(_->Cfloat(zero(T)), 4), # borderColor::NTuple{4, Cfloat}
+            ntuple(_->Cfloat(zero(Te)), 4), # borderColor::NTuple{4, Cfloat}
             ntuple(_->Cint(0), 12)))
             
         texObject_ref = Ref{CUtexObject}(0)
@@ -287,26 +305,36 @@ end
         Tuple{Int32,Int32,Int32,Int32},
         Tuple{Int64,Float32,Float32,Float32}, texObject, x, y, z)
 end
+@inline texXD(t::CuDeviceTexture{T,1} where T, x::Real)::Tuple{Int32,Int32,Int32,Int32} = tex1d(reinterpret(Int64, t.handle), convert(Float32, x))
+@inline texXD(t::CuDeviceTexture{T,2} where T, x::Real, y::Real)::Tuple{Int32,Int32,Int32,Int32} = tex2d(reinterpret(Int64, t.handle), convert(Float32, x), convert(Float32, y))
+@inline texXD(t::CuDeviceTexture{T,3} where T, x::Real, y::Real, z::Real)::Tuple{Int32,Int32,Int32,Int32} = tex3d(reinterpret(Int64, t.handle), convert(Float32, x), convert(Float32, y), convert(Float32, z))
 
-@inline _reconstruct(::Type{T}, x::Int32) where {T<:Union{Int32,UInt32,Int16,UInt16,Int8,UInt8}} = unsafe_trunc(T, x)
-@inline _reconstruct(::Type{Float32}, x::Int32) = reinterpret(Float32, x)
-@inline _reconstruct(::Type{Float16}, x::Int32) = convert(Float16, reinterpret(Float32, x))
 
-function Base.getindex(t::CuDeviceTexture{T,1}, x::Real) where {T}
-    Ta = cuda_alias_type(T)
-    i32 = tex1d(reinterpret(Int64, t.handle), convert(Float32, x))[1]
-    reinterpret(T, _reconstruct(Ta, i32))
+@inline reconstruct(::Type{T}, x::Int32) where {T<:Union{Int32,UInt32,Int16,UInt16,Int8,UInt8}} = unsafe_trunc(T, x)
+@inline reconstruct(::Type{Float32}, x::Int32) = reinterpret(Float32, x)
+@inline reconstruct(::Type{Float16}, x::Int32) = convert(Float16, reinterpret(Float32, x))
+
+@inline reconstruct(::Type{T}, i32_x4::NTuple{4,Int32}) where T = reconstruct(T, i32_x4[1])
+@inline reconstruct(::Type{NTuple{2,T}}, i32_x4::NTuple{4,Int32}) where T = (reconstruct(T, i32_x4[1]), reconstruct(T, i32_x4[2]))
+@inline reconstruct(::Type{NTuple{4,T}}, i32_x4::NTuple{4,Int32}) where T = (reconstruct(T, i32_x4[1]),
+                                                                             reconstruct(T, i32_x4[2]),
+                                                                             reconstruct(T, i32_x4[3]),
+                                                                             reconstruct(T, i32_x4[4]))
+
+@inline function cast(::Type{T}, x) where {T}
+    @assert sizeof(T) == sizeof(x)
+    return unsafe_load(Ptr{T}(pointer_from_objref(Ref(x))))
 end
-function Base.getindex(t::CuDeviceTexture{T,2}, x::Real, y::Real) where {T}
-    Ta = cuda_alias_type(T)
-    i32 = tex2d(reinterpret(Int64, t.handle), convert(Float32, x), convert(Float32, y))[1]
-    reinterpret(T, _reconstruct(Ta, i32))
+
+@inline function _getindex(t::CuDeviceTexture{T,N}, idcs::NTuple{Ni,Real}) where {T,N,Ni}
+    Ta = cuda_texture_alias_type(T)
+    i32_x4 = texXD(t, idcs...)
+    cast(T, reconstruct(Ta, i32_x4))
 end
-function Base.getindex(t::CuDeviceTexture{T,3}, x::Real, y::Real, z::Real) where {T}
-    Ta = cuda_alias_type(T)
-    i32 = tex3d(reinterpret(Int64, t.handle), convert(Float32, x), convert(Float32, y), convert(Float32, z))[1]
-    reinterpret(T, _reconstruct(Ta, i32))
-end
+
+@inline Base.getindex(t::CuDeviceTexture{T,1}, x::R) where {T,R<:Real} = _getindex(t, (x,))
+@inline Base.getindex(t::CuDeviceTexture{T,2}, x::R, y::R) where {T,R<:Real} = _getindex(t, (x,y))
+@inline Base.getindex(t::CuDeviceTexture{T,3}, x::R, y::R, z::R) where {T,R<:Real} = _getindex(t, (x,y,z))
 
 
 end # module
