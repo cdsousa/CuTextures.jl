@@ -40,47 +40,77 @@ function fetch_all(texture)
 end
 
 
+@testset "Using CuTextureArray initialized from device" begin
+    testheight, testwidth, testdepth = 16, 16, 4
+    a1D = convert(Array{Float32}, 1:testheight)
+    a2D = convert(Array{Float32}, repeat(1:testheight, 1, testwidth) + repeat(0.01 * (1:testwidth)', testheight, 1))
+    a3D = convert(Array{Float32}, repeat(a2D, 1, 1, testdepth))
+    for k = 1:testdepth; a3D[:,:,k] .+= 0.0001 * k; end
+    d_a1D = CuArray(a1D)
+    d_a2D = CuArray(a2D)
+    d_a3D = CuArray(a3D)
 
-testheight, testwidth, testdepth = 16, 16, 4
-a1D = convert(Array{Float32}, 1:testheight)
-a2D = convert(Array{Float32}, repeat(1:testheight, 1, testwidth) + repeat(0.01 * (1:testwidth)', testheight, 1))
-a3D = convert(Array{Float32}, repeat(a2D, 1, 1, testdepth))
-for k = 1:testdepth; a3D[:,:,k] .+= 0.0001 * k; end
-d_a1D = CuArray(a1D)
-d_a2D = CuArray(a2D)
-d_a3D = CuArray(a3D)
-
-@testset "Use CuTextureArray" begin
     texarr1D = CuTextureArray{Float32}(testheight)
     copyto!(texarr1D, d_a1D)
     tex1D = CuTexture(texarr1D)
-    fetched1D = fetch_all(tex1D)
-    @test fetched1D == d_a1D
+    @test fetch_all(tex1D) == d_a1D
 
     texarr2D = CuTextureArray{Float32}(testheight, testwidth)
-    copyto!(texarr2D, d_a2D)
     tex2D = CuTexture(texarr2D)
-    fetched2D = fetch_all(tex2D)
-    @test fetched2D == d_a2D 
+    copyto!(texarr2D, d_a2D)
+    @test fetch_all(tex2D) == d_a2D 
 
     texarr3D = CuTextureArray{Float32}(testheight, testwidth, testdepth)
-    copyto!(texarr3D, d_a3D)
     tex3D = CuTexture(texarr3D)
-    fetched3D = fetch_all(tex3D)
-    @test fetched3D == d_a3D  
+    copyto!(texarr3D, d_a3D)
+    @test fetch_all(tex3D) == d_a3D  
+
+    tex3D_direct = CuTexture{Float32}(testheight, testwidth, testdepth)
+    copyto!(tex3D_direct.mem, d_a3D)
+    @test fetch_all(tex3D_direct) == d_a3D  
 end
 
-@testset "Wrap CuArray" begin
+
+@testset "Using CuTextureArray initialized from host" begin
+    testheight, testwidth, testdepth = 16, 16, 4
+    a1D = convert(Array{Float32}, 1:testheight)
+    a2D = convert(Array{Float32}, repeat(1:testheight, 1, testwidth) + repeat(0.01 * (1:testwidth)', testheight, 1))
+    a3D = convert(Array{Float32}, repeat(a2D, 1, 1, testdepth))
+    for k = 1:testdepth; a3D[:,:,k] .+= 0.0001 * k; end
+
+    texarr1D = CuTextureArray{Float32}(testheight)
+    copyto!(texarr1D, a1D)
+    tex1D = CuTexture(texarr1D)
+    @test Array(fetch_all(tex1D)) == a1D
+
+    texarr2D = CuTextureArray{Float32}(testheight, testwidth)
+    copyto!(texarr2D, a2D)
+    tex2D = CuTexture(texarr2D)
+    @test Array(fetch_all(tex2D)) == a2D 
+
+    texarr3D = CuTextureArray{Float32}(testheight, testwidth, testdepth)
+    copyto!(texarr3D, a3D)
+    tex3D = CuTexture(texarr3D)
+    @test Array(fetch_all(tex3D)) == a3D  
+end
+
+
+@testset "Wrapping CuArray" begin
+    testheight, testwidth, testdepth = 16, 16, 4
+    a1D = convert(Array{Float32}, 1:testheight)
+    a2D = convert(Array{Float32}, repeat(1:testheight, 1, testwidth) + repeat(0.01 * (1:testwidth)', testheight, 1))
+    d_a1D = CuArray(a1D)
+    d_a2D = CuArray(a2D)
+
+    # Strangely, this is not working
     texwrap1D = CuTexture(d_a1D)
-    fetched1D = fetch_all(texwrap1D)
-    @test_broken fetched1D == d_a1D  
+    @test_broken fetch_all(texwrap1D) == d_a1D  
 
+    # This works as long as d_a2D is well pitched
     texwrap2D = CuTexture(d_a2D)
-    fetched2D = fetch_all(texwrap2D)
-    @test fetched2D == d_a2D 
+    @test fetch_all(texwrap2D) == d_a2D 
 end
 
-##
 
 @testset "All CUDA types" begin
 
@@ -89,17 +119,18 @@ end
         a2D = rand(T, testheight, testwidth)
         d_a2D = CuArray(a2D)
 
-        tex_2D = CuTexture(CuTextureArray{T}(testheight, testwidth))
+        # Using CuTextureArray
+        tex_2D = CuTexture{T}(testheight, testwidth)
         copyto!(tex_2D.mem, d_a2D)
+        @test fetch_all(tex_2D) == d_a2D
 
-        # tex_2D = CuTexture(d_a2D)
-
-        fetched2D = fetch_all(tex_2D)
-        @test fetched2D == d_a2D
+        # Wrapping CuArray
+        # This works as long as d_a2D is well pitched
+        texwrap_2D = CuTexture(d_a2D)
+        @test fetch_all(texwrap_2D) == d_a2D
     end
 
 end
-
 
 
 @testset "Multiple channels" begin
@@ -109,8 +140,7 @@ end
     texarr2D = CuTextureArray{eltype(d_a2D)}(size(d_a2D)...)
     copyto!(texarr2D, d_a2D)
     tex2D = CuTexture(texarr2D)
-    fetched2D = fetch_all(tex2D)
-    @test fetched2D == d_a2D 
+    @test fetch_all(tex2D) == d_a2D 
 
     testheight, testwidth, testdepth = 16, 16, 4
     a2D = [(Int16(i), Int16(j), Int16(i+j), Int16(i-j)) for i = 1:testheight, j = 1:testwidth]
@@ -118,6 +148,30 @@ end
     texarr2D = CuTextureArray{eltype(d_a2D)}(size(d_a2D)...)
     copyto!(texarr2D, d_a2D)
     tex2D = CuTexture(texarr2D)
-    fetched2D = fetch_all(tex2D)
-    @test fetched2D == d_a2D 
+    @test fetch_all(tex2D) == d_a2D 
+end
+
+
+@testset "Custom type" begin
+    primitive type AKindOfUInt8 8 end
+    struct AKindOfRGBA
+        r::AKindOfUInt8
+        g::AKindOfUInt8
+        b::AKindOfUInt8
+        a::AKindOfUInt8
+    end
+    CuTextures.cuda_texture_alias_type(::Type{AKindOfRGBA}) = NTuple{4, UInt8}
+
+    testheight, testwidth, testdepth = 16, 16, 4
+    a2D = [AKindOfRGBA(reinterpret(AKindOfUInt8,UInt8(i)),
+                       reinterpret(AKindOfUInt8,UInt8(j)),
+                       reinterpret(AKindOfUInt8,UInt8(j+i)),
+                       reinterpret(AKindOfUInt8,UInt8(j>i))) for i = 1:testheight, j = 1:testwidth]
+    d_a2D = CuArray(a2D)
+    
+    texarr2D = CuTextureArray{eltype(d_a2D)}(size(d_a2D)...)
+    copyto!(texarr2D, d_a2D)
+    tex2D = CuTexture(texarr2D)
+
+    @test fetch_all(tex2D) == d_a2D 
 end
