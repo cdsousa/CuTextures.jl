@@ -5,7 +5,10 @@ import CUDAdrv: cuArray3DCreate, CUarray, CUarray_format, CUDA_ARRAY3D_DESCRIPTO
 import CUDAdrv: cuMemcpyDtoA, cuMemcpyHtoA, cuMemcpy2D, CUDA_MEMCPY2D, cuMemcpy3D, CUDA_MEMCPY3D
 import CuArrays: CuArray
 
-
+"""
+Type to handle CUDA arrays which are opaque device memory buffers optimized for texture fetching.
+The only way to initialize the content of this objects is by copying from host or device arrays using the constructor or `copyto!` calls.
+"""
 mutable struct CuTextureArray{T,N}
     handle::CUarray
     dims::Dims{N}
@@ -140,4 +143,11 @@ function Base.copyto!(dst::CuTextureArray{T,3}, src::Union{Array{T,3}, CuArray{T
     ))
     cuMemcpy3D(copy_ref)
     return dst
+end
+
+
+function CuTextureArray(a::Union{Array{T,N}, CuArray{T,N}}) where {T,N}
+    t = CuTextureArray{T}(size(a)...)
+    copyto!(t, a)
+    return t
 end

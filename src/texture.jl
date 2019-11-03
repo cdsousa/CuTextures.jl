@@ -7,44 +7,15 @@ CU_TRSF_NORMALIZED_COORDINATES, CU_TRSF_READ_AS_INTEGER
 
 import CuArrays: CuArray
 
+"""
+Type to handle CUDA texture objects. These objects do not hold data by themselves,
+but instead are bound either to `CuTextureArray`s (CUDA arrays) or to `CuArray`s.
+(Note: For correct wrapping `CuArray`s it is necessary the their memory is well aligned and strided (good pitch).
+Currently, that is not being enforced.)
 
-function _construct_CUDA_RESOURCE_DESC(texarr::CuTextureArray{T,N}) where {T,N}
-# #### TODO: use CUDAdrv wrapped struct when its padding becomes fixed
-# res = Ref{CUDAdrv.ANONYMOUS1_res}()
-# unsafe_store!(Ptr{CUarray}(pointer_from_objref(res)), texarr.handle)
-# resDesc_ref = Ref(CUDA_RESOURCE_DESC(
-#     CU_RESOURCE_TYPE_ARRAY, # resType::CUresourcetype
-#     res[], # res::ANONYMOUS1_res
-#     0 # flags::UInt32
-# ))
-    resDesc_ref = Ref((CU_RESOURCE_TYPE_ARRAY, # resType::CUresourcetype
-                       texarr.handle, # 1 x UInt64
-                       ntuple(_->Int64(0), 15), # 15 x UInt64
-                       UInt32(0)))
-    return resDesc_ref
-end
-
-function _construct_CUDA_RESOURCE_DESC(arr::CuArray{T,N}) where {T,N}
-# TODO: take care of allowed pitches
-    @assert 1 <= N <= 2 "Only 1D or 2D (dimension) CuArray objects can be wrapped in a texture"
-    Ta = _cuda_texture_alias_type_with_asserted_size(T)
-    nchan, Te = _alias_type_to_nchan_and_eltype(Ta)
-    num_channels = UInt32(nchan)
-    format = _type_to_cuarrayformat(Te)
-# #### TODO: use CUDAdrv wrapped struct when its padding becomes fixed
-    resDesc_ref = Ref(((N == 1 ? CU_RESOURCE_TYPE_LINEAR : CU_RESOURCE_TYPE_PITCH2D), # resType::CUresourcetype
-                        arr.buf.ptr, # 1 x UInt64 (CUdeviceptr)
-                        format, # 1/2 x UInt64 (CUarray_format)
-                        UInt32(num_channels), # 1/2 x UInt64
-                        (N == 2 ? size(arr, 1) : size(arr, 1) * sizeof(T)), # 1 x UInt64 nx
-                        (N == 2 ? size(arr, 2) : 0), # 1 x UInt64 ny
-                        (N == 2 ? size(arr, 1) * sizeof(T) : 0), # 1 x UInt64 pitch
-                        ntuple(_->Int64(0), 11), # 11 x UInt64
-                        UInt32(0)))
-    return resDesc_ref
-end
-
-""
+Theses objects are meant to be used to do texture fetchts inside CUDAnative.jl kernels.
+When passed to CUDAnative.jl kernels, `CuTexture` objects are transformed into `CuDeviceTexture`s objects.
+"""
 mutable struct CuTexture{T,N,Mem}
     mem::Mem
     handle::CUtexObject
@@ -81,6 +52,42 @@ mutable struct CuTexture{T,N,Mem}
         finalizer(unsafe_free!, t)
         return t
     end
+end
+
+function _construct_CUDA_RESOURCE_DESC(texarr::CuTextureArray{T,N}) where {T,N}
+    # #### TODO: use CUDAdrv wrapped struct when its padding becomes fixed
+    # res = Ref{CUDAdrv.ANONYMOUS1_res}()
+    # unsafe_store!(Ptr{CUarray}(pointer_from_objref(res)), texarr.handle)
+    # resDesc_ref = Ref(CUDA_RESOURCE_DESC(
+    #     CU_RESOURCE_TYPE_ARRAY, # resType::CUresourcetype
+    #     res[], # res::ANONYMOUS1_res
+    #     0 # flags::UInt32
+    # ))
+    resDesc_ref = Ref((CU_RESOURCE_TYPE_ARRAY, # resType::CUresourcetype
+                        texarr.handle, # 1 x UInt64
+                        ntuple(_->Int64(0), 15), # 15 x UInt64
+                        UInt32(0)))
+    return resDesc_ref
+end
+
+function _construct_CUDA_RESOURCE_DESC(arr::CuArray{T,N}) where {T,N}
+# TODO: take care of allowed pitches
+    @assert 1 <= N <= 2 "Only 1D or 2D (dimension) CuArray objects can be wrapped in a texture"
+    Ta = _cuda_texture_alias_type_with_asserted_size(T)
+    nchan, Te = _alias_type_to_nchan_and_eltype(Ta)
+    num_channels = UInt32(nchan)
+    format = _type_to_cuarrayformat(Te)
+# #### TODO: use CUDAdrv wrapped struct when its padding becomes fixed
+    resDesc_ref = Ref(((N == 1 ? CU_RESOURCE_TYPE_LINEAR : CU_RESOURCE_TYPE_PITCH2D), # resType::CUresourcetype
+                        arr.buf.ptr, # 1 x UInt64 (CUdeviceptr)
+                        format, # 1/2 x UInt64 (CUarray_format)
+                        UInt32(num_channels), # 1/2 x UInt64
+                        (N == 2 ? size(arr, 1) : size(arr, 1) * sizeof(T)), # 1 x UInt64 nx
+                        (N == 2 ? size(arr, 2) : 0), # 1 x UInt64 ny
+                        (N == 2 ? size(arr, 1) * sizeof(T) : 0), # 1 x UInt64 pitch
+                        ntuple(_->Int64(0), 11), # 11 x UInt64
+                        UInt32(0)))
+    return resDesc_ref
 end
 
 function unsafe_free!(t::CuTexture)

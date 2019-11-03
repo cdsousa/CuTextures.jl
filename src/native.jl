@@ -1,4 +1,7 @@
-
+"""
+Lightweight type to handle CUDA texture objects inside CUDAnative.jl kernels.
+Textures are fetched through indexing operations on `CuTexture`/`CuDeviceTexture` objects, e.g., `cutexture2d[0.2f0, 0.2f0]`.
+"""
 struct CuDeviceTexture{T,N}
     handle::CUtexObject
 end
@@ -29,7 +32,7 @@ end
 @inline texXD(t::CuDeviceTexture{T,3} where T, x::Real, y::Real, z::Real)::Tuple{Int32,Int32,Int32,Int32} = tex3d(reinterpret(Int64, t.handle), convert(Float32, x), convert(Float32, y), convert(Float32, z))
 
 
-@inline reconstruct(::Type{T}, x::Int32) where {T<:Union{Int32,UInt32,Int16,UInt16,Int8,UInt8}} = unsafe_trunc(T, x)
+@inline reconstruct(::Type{T}, x::Int32) where {T <: Union{Int32,UInt32,Int16,UInt16,Int8,UInt8}} = unsafe_trunc(T, x)
 @inline reconstruct(::Type{Float32}, x::Int32) = reinterpret(Float32, x)
 @inline reconstruct(::Type{Float16}, x::Int32) = convert(Float16, reinterpret(Float32, x))
 
@@ -52,6 +55,6 @@ end
     cast(T, reconstruct(Ta, i32_x4))
 end
 
-@inline Base.getindex(t::CuDeviceTexture{T,1}, x::R) where {T,R<:Real} = _getindex(t, (x,))
-@inline Base.getindex(t::CuDeviceTexture{T,2}, x::R, y::R) where {T,R<:Real} = _getindex(t, (x,y))
-@inline Base.getindex(t::CuDeviceTexture{T,3}, x::R, y::R, z::R) where {T,R<:Real} = _getindex(t, (x,y,z))
+@inline Base.getindex(t::CuDeviceTexture{T,1}, x::R) where {T,R <: Real} = _getindex(t, (x,))
+@inline Base.getindex(t::CuDeviceTexture{T,2}, x::R, y::R) where {T,R <: Real} = _getindex(t, (x, y))
+@inline Base.getindex(t::CuDeviceTexture{T,3}, x::R, y::R, z::R) where {T,R <: Real} = _getindex(t, (x, y, z))

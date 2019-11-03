@@ -60,6 +60,10 @@ end
     copyto!(texarr2D, d_a2D)
     @test fetch_all(tex2D) == d_a2D 
 
+    texarr2D_dir = CuTextureArray(d_a2D)
+    tex2D_dir = CuTexture(texarr2D_dir)
+    @test fetch_all(tex2D_dir) == d_a2D 
+
     texarr3D = CuTextureArray{Float32}(testheight, testwidth, testdepth)
     tex3D = CuTexture(texarr3D)
     copyto!(texarr3D, d_a3D)
@@ -86,7 +90,10 @@ end
     texarr2D = CuTextureArray{Float32}(testheight, testwidth)
     copyto!(texarr2D, a2D)
     tex2D = CuTexture(texarr2D)
-    @test Array(fetch_all(tex2D)) == a2D 
+    @test Array(fetch_all(tex2D)) == a2D
+
+    tex2D_dir = CuTexture(CuTextureArray(a2D))
+    @test Array(fetch_all(tex2D_dir)) == a2D 
 
     texarr3D = CuTextureArray{Float32}(testheight, testwidth, testdepth)
     copyto!(texarr3D, a3D)
@@ -143,7 +150,7 @@ end
     @test fetch_all(tex2D) == d_a2D 
 
     testheight, testwidth, testdepth = 16, 16, 4
-    a2D = [(Int16(i), Int16(j), Int16(i+j), Int16(i-j)) for i = 1:testheight, j = 1:testwidth]
+    a2D = [(Int16(i), Int16(j), Int16(i + j), Int16(i - j)) for i = 1:testheight, j = 1:testwidth]
     d_a2D = CuArray(a2D)
     texarr2D = CuTextureArray{eltype(d_a2D)}(size(d_a2D)...)
     copyto!(texarr2D, d_a2D)
@@ -160,13 +167,13 @@ end
         b::AKindOfUInt8
         a::AKindOfUInt8
     end
-    CuTextures.cuda_texture_alias_type(::Type{AKindOfRGBA}) = NTuple{4, UInt8}
+    CuTextures.cuda_texture_alias_type(::Type{AKindOfRGBA}) = NTuple{4,UInt8}
 
     testheight, testwidth, testdepth = 16, 16, 4
-    a2D = [AKindOfRGBA(reinterpret(AKindOfUInt8,UInt8(i)),
-                       reinterpret(AKindOfUInt8,UInt8(j)),
-                       reinterpret(AKindOfUInt8,UInt8(j+i)),
-                       reinterpret(AKindOfUInt8,UInt8(j>i))) for i = 1:testheight, j = 1:testwidth]
+    a2D = [AKindOfRGBA(reinterpret(AKindOfUInt8, UInt8(i)),
+                       reinterpret(AKindOfUInt8, UInt8(j)),
+                       reinterpret(AKindOfUInt8, UInt8(j + i)),
+                       reinterpret(AKindOfUInt8, UInt8(j > i))) for i = 1:testheight, j = 1:testwidth]
     d_a2D = CuArray(a2D)
     
     texarr2D = CuTextureArray{eltype(d_a2D)}(size(d_a2D)...)
