@@ -25,7 +25,9 @@ mutable struct CuTexture{T,N,Mem}
         # TODO: add support to choose nearest-neighbor or linear interpolation 
         # TODO: add support to choose address mode: clamp, border, etc.
 
-        nchan, Te = _alias_type_to_nchan_and_eltype(_cuda_texture_alias_type_with_asserted_size(T))
+        Ta = cuda_texture_alias_type(T)
+        _assert_alias_size(T, Ta)
+        nchan, format, Te = _alias_type_to_nchan_and_format(Ta)
 
         resDesc_ref = _construct_CUDA_RESOURCE_DESC(texmemory)
         resDesc_ref = pointer_from_objref(resDesc_ref)
@@ -73,15 +75,16 @@ end
 function _construct_CUDA_RESOURCE_DESC(arr::CuArray{T,N}) where {T,N}
 # TODO: take care of allowed pitches
     @assert 1 <= N <= 2 "Only 1D or 2D (dimension) CuArray objects can be wrapped in a texture"
-    Ta = _cuda_texture_alias_type_with_asserted_size(T)
-    nchan, Te = _alias_type_to_nchan_and_eltype(Ta)
-    num_channels = UInt32(nchan)
-    format = _type_to_cuarrayformat(Te)
+    
+    Ta = cuda_texture_alias_type(T)
+    _assert_alias_size(T, Ta)
+    nchan, format, Te = _alias_type_to_nchan_and_format(Ta)
+
 # #### TODO: use CUDAdrv wrapped struct when its padding becomes fixed
     resDesc_ref = Ref(((N == 1 ? CU_RESOURCE_TYPE_LINEAR : CU_RESOURCE_TYPE_PITCH2D), # resType::CUresourcetype
                         arr.buf.ptr, # 1 x UInt64 (CUdeviceptr)
                         format, # 1/2 x UInt64 (CUarray_format)
-                        UInt32(num_channels), # 1/2 x UInt64
+                        UInt32(nchan), # 1/2 x UInt64
                         (N == 2 ? size(arr, 1) : size(arr, 1) * sizeof(T)), # 1 x UInt64 nx
                         (N == 2 ? size(arr, 2) : 0), # 1 x UInt64 ny
                         (N == 2 ? size(arr, 1) * sizeof(T) : 0), # 1 x UInt64 pitch

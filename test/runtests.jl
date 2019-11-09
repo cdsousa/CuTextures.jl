@@ -160,25 +160,45 @@ end
 
 
 @testset "Custom type" begin
-    primitive type AKindOfUInt8 8 end
-    struct AKindOfRGBA
-        r::AKindOfUInt8
-        g::AKindOfUInt8
-        b::AKindOfUInt8
-        a::AKindOfUInt8
+    @testset "Auto cast" begin
+        struct AKindOfRGBA
+            r::UInt8
+            g::UInt8
+            b::UInt8
+            a::UInt8
+        end
+
+        @test cuda_texture_alias_type(AKindOfRGBA) == NTuple{4,UInt8}
+
+        testheight, testwidth, testdepth = 16, 16, 4
+        a2D = [AKindOfRGBA(UInt8(i), UInt8(j), UInt8(j + i), UInt8(j > i)) for i = 1:testheight, j = 1:testwidth]
+        d_a2D = CuArray(a2D)
+
+        texarr2D = CuTextureArray{eltype(d_a2D)}(size(d_a2D)...)
+        copyto!(texarr2D, d_a2D)
+        tex2D = CuTexture(texarr2D)
+
+        @test fetch_all(tex2D) == d_a2D 
     end
-    CuTextures.cuda_texture_alias_type(::Type{AKindOfRGBA}) = NTuple{4,UInt8}
 
-    testheight, testwidth, testdepth = 16, 16, 4
-    a2D = [AKindOfRGBA(reinterpret(AKindOfUInt8, UInt8(i)),
-                       reinterpret(AKindOfUInt8, UInt8(j)),
-                       reinterpret(AKindOfUInt8, UInt8(j + i)),
-                       reinterpret(AKindOfUInt8, UInt8(j > i))) for i = 1:testheight, j = 1:testwidth]
-    d_a2D = CuArray(a2D)
-    
-    texarr2D = CuTextureArray{eltype(d_a2D)}(size(d_a2D)...)
-    copyto!(texarr2D, d_a2D)
-    tex2D = CuTexture(texarr2D)
+    @testset "Manual cast" begin
+        primitive type AKindOfFloat32 32 end
 
-    @test fetch_all(tex2D) == d_a2D 
+        # It is not enough to define `cuda_texture_alias_type(::Type{AKindOfFloat32}) = Float32`, one has to define the whole type.
+        #   This is due to `cuda_texture_alias_type` being a *`@generated`* function.
+        CuTextures.cuda_texture_alias_type(::Type{NTuple{2,AKindOfFloat32}}) = NTuple{2,Float32}
+        @test cuda_texture_alias_type(NTuple{2,AKindOfFloat32}) == NTuple{2,Float32}
+
+        testheight, testwidth, testdepth = 16, 16, 4
+        a2D = [
+            (reinterpret(AKindOfFloat32, Float32(i)), reinterpret(AKindOfFloat32, Float32(j)))
+            for i = 1:testheight, j = 1:testwidth]
+        d_a2D = CuArray(a2D)
+        
+        texarr2D = CuTextureArray{eltype(d_a2D)}(size(d_a2D)...)
+        copyto!(texarr2D, d_a2D)
+        tex2D = CuTexture(texarr2D)
+
+        @test fetch_all(tex2D) == d_a2D
+    end
 end

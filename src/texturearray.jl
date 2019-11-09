@@ -15,10 +15,10 @@ mutable struct CuTextureArray{T,N}
     # TODO: hold the CUDA context here so that it is not finalized before this object
     
     function CuTextureArray{T,N}(dims::Dims{N}) where {T,N}
-        Ta = _cuda_texture_alias_type_with_asserted_size(T)
-        nchan, Te = _alias_type_to_nchan_and_eltype(Ta)
-        num_channels = UInt32(nchan)
-        format = _type_to_cuarrayformat(Te)
+        Ta = cuda_texture_alias_type(T)
+        _assert_alias_size(T, Ta)
+        nchan, format = _alias_type_to_nchan_and_format(Ta)
+
         if N == 2
             width, height = dims
             depth = 0
@@ -47,7 +47,7 @@ mutable struct CuTextureArray{T,N}
                                                         height, # Height::Csize_t
                                                         depth, # Depth::Csize_t
                                                         format, # Format::CUarray_format
-                                                        num_channels, # NumChannels::UInt32
+                                                        UInt32(nchan), # NumChannels::UInt32
                                                         0))
 
         handle_ref = Ref{CUarray}(C_NULL)

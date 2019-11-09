@@ -5,9 +5,6 @@ using CuTextures
 # Get the input image. Use RGBA to have 4 channels since CUDA textures can have only 1, 2 or 4 channels.
 img = RGBA{N0f8}.(testimage("lighthouse"))
 
-# Tell CuTextures the alias type of RGBA{N0f8} in the CUDA textures world
-CuTextures.cuda_texture_alias_type(::Type{RGBA{N0f8}}) = NTuple{4,UInt8}
-
 # Create a texture memory object (CUDA array) and initilaize it with the input image content (from host).
 texturearray = CuTextureArray(img)
 
