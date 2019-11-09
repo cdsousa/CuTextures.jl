@@ -14,8 +14,8 @@ but instead are bound either to `CuTextureArray`s (CUDA arrays) or to `CuArray`s
 When passed to *CUDAnative.jl* kernels, `CuTexture` objects are transformed into lightweight `CuDeviceTexture` objects.
 Fetching (sampling) to textures from within the kernels can then be done through indexing operations on the `CuTexture`/`CuDeviceTexture` objects, like `interpolatedval = sometexture2d[0.2f0, 0.9f0]`.
 
-CUDA textures elements are limited to a set of supported element types: `Float32`, `Float16`, `Int32`, `UInt32`, `Int16`, `UInt16`, `Int8` and `UInt8`, which can be packed as single elements or in 2 or 4 channels just like if they were NTuples of 2 or 4 elements.
-`CuTextures` is able to cast to and from Julia types that are composed of compatible types. For that, `CuTextures` must be informed of the "alias" type by overloading the function `CuTextures.cuda_texture_alias_type`. For example, for the *FixedPointNumbers.jl* type `N0f8`: `CuTextures.cuda_texture_alias_type(::Type{N0f8}) = UInt8`, and for a `RBGA{N0f8}` pixel type from *ColorTypes.jl*: `CuTextures.cuda_texture_alias_type(::Type{RGBA{N0f8}}) = NTuple{4,UInt8}`
+CUDA textures elements are limited to a set of supported primitive types: `Float32`, `Float16`, `Int32`, `UInt32`, `Int16`, `UInt16`, `Int8` and `UInt8`, which can be packed as single elements or in 2 or 4 channels just like if they were NTuples of 2 or 4 elements.
+`CuTextures` is able to automatically cast (reinterpreting bits) to and from Julia types that are composed of compatible types. For example, the type `N0f8` from *FixedPointNumbers.jl* is automatically casted to and from `UInt8`, and the pixel type `RBGA{N0f8}` from *ColorTypes.jl* is casted to and from `NTuple{4,UInt8}`.
 
 
 ## To do

@@ -2,9 +2,10 @@
 Lightweight type to handle CUDA texture objects inside CUDAnative.jl kernels.
 Textures are fetched through indexing operations on `CuTexture`/`CuDeviceTexture` objects, e.g., `cutexture2d[0.2f0, 0.2f0]`.
 """
-struct CuDeviceTexture{T,N}
+struct CuDeviceTexture{T,N,Ta}
     handle::CUtexObject
 end
+CuDeviceTexture{T,N}(handle::CUtexObject) where {T,N} = CuDeviceTexture{T,N,cuda_texture_alias_type(T)}(handle)
 
 Adapt.adapt_storage(::CUDAnative.Adaptor, t::CuTexture{T,N}) where {T,N} = CuDeviceTexture{T,N}(t.handle)
 
@@ -49,9 +50,8 @@ end
     return unsafe_load(Ptr{T}(pointer_from_objref(Ref(x))))
 end
 
-@inline function _getindex(t::CuDeviceTexture{T,N}, idcs::NTuple{Ni,Real}) where {T,N,Ni}
+@inline function _getindex(t::CuDeviceTexture{T,N,Ta}, idcs::NTuple{Ni,Real}) where {T,N,Ta,Ni}
     i32_x4 = texXD(t, idcs...)
-    Ta = cuda_texture_alias_type(T)
     cast(T, reconstruct(Ta, i32_x4))
 end
 
