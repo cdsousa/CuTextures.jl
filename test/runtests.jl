@@ -40,6 +40,7 @@ function fetch_all(texture)
 end
 
 
+
 @testset "Using CuTextureArray initialized from device" begin
     testheight, testwidth, testdepth = 16, 16, 4
     a1D = convert(Array{Float32}, 1:testheight)

@@ -2,10 +2,24 @@
 import CUDAdrv: CUtexObject, cuTexObjectCreate, cuTexObjectDestroy, 
 CUDA_RESOURCE_DESC, CUDA_TEXTURE_DESC, CUDA_RESOURCE_VIEW_DESC,
 CU_RESOURCE_TYPE_ARRAY, CU_RESOURCE_TYPE_LINEAR, CU_RESOURCE_TYPE_PITCH2D,
-CU_TR_ADDRESS_MODE_BORDER, CU_TR_ADDRESS_MODE_CLAMP, CU_TR_FILTER_MODE_LINEAR,
+CUaddress_mode_enum, CU_TR_ADDRESS_MODE_WRAP, CU_TR_ADDRESS_MODE_CLAMP,
+CU_TR_ADDRESS_MODE_MIRROR, CU_TR_ADDRESS_MODE_BORDER,
+CUfilter_mode_enum, CU_TR_FILTER_MODE_POINT, CU_TR_FILTER_MODE_LINEAR,
 CU_TRSF_NORMALIZED_COORDINATES, CU_TRSF_READ_AS_INTEGER
 
 import CuArrays: CuArray
+
+export mode_wrap, mode_clamp, mode_mirror, mode_border, mode_point, mode_linear
+
+const AddressMode = CUDAdrv.CUaddress_mode_enum
+const mode_wrap = CU_TR_ADDRESS_MODE_WRAP
+const mode_clamp = CU_TR_ADDRESS_MODE_CLAMP
+const mode_mirror = CU_TR_ADDRESS_MODE_MIRROR
+const mode_border = CU_TR_ADDRESS_MODE_BORDER
+
+const FilterMode = CUDAdrv.CUfilter_mode_enum
+const mode_point = CU_TR_FILTER_MODE_POINT
+const mode_linear = CU_TR_FILTER_MODE_LINEAR
 
 """
 Type to handle CUDA texture objects. These objects do not hold data by themselves,
@@ -19,11 +33,11 @@ When passed to CUDAnative.jl kernels, `CuTexture` objects are transformed into `
 mutable struct CuTexture{T,N,Mem}
     mem::Mem
     handle::CUtexObject
-
-    function CuTexture{T,N,Mem}(texmemory::Mem) where {T,N,Mem}
-        # TODO: add support to choose normalized or non-normalized coordinate access
-        # TODO: add support to choose nearest-neighbor or linear interpolation 
-        # TODO: add support to choose address mode: clamp, border, etc.
+    
+    function CuTexture{T,N,Mem}(texmemory::Mem,
+                                address_modes::NTuple{N,AddressMode},
+                                normalized_coordinates::Bool,
+                                filter_mode::FilterMode) where {T,N,Mem}
 
         Ta = cuda_texture_alias_type(T)
         _assert_alias_size(T, Ta)
@@ -32,15 +46,16 @@ mutable struct CuTexture{T,N,Mem}
         resDesc_ref = _construct_CUDA_RESOURCE_DESC(texmemory)
         resDesc_ref = pointer_from_objref(resDesc_ref)
 
-        addressMode = CU_TR_ADDRESS_MODE_CLAMP  # N > 1 ? CU_TR_ADDRESS_MODE_BORDER : CU_TR_ADDRESS_MODE_CLAMP
-        flags = CU_TRSF_NORMALIZED_COORDINATES
+        address_modes = tuple(address_modes..., ntuple(_->mode_clamp, 3 - N)...)
+        filter_mode = filter_mode
+        flags = (normalized_coordinates ? CU_TRSF_NORMALIZED_COORDINATES : zero(CU_TRSF_NORMALIZED_COORDINATES))
         flags = flags | (Te <: Integer ? CU_TRSF_READ_AS_INTEGER : zero(CU_TRSF_READ_AS_INTEGER))
 
-        texDesc_ref = Ref(CUDA_TEXTURE_DESC(ntuple(_->addressMode, 3), # addressMode::NTuple{3, CUaddress_mode}
-                                            CU_TR_FILTER_MODE_LINEAR, # filterMode::CUfilter_mode
+        texDesc_ref = Ref(CUDA_TEXTURE_DESC(address_modes, # addressMode::NTuple{3, CUaddress_mode}
+                                            filter_mode, # filterMode::CUfilter_mode
                                             flags, # flags::UInt32
                                             1, # maxAnisotropy::UInt32
-                                            CU_TR_FILTER_MODE_LINEAR, # mipmapFilterMode::CUfilter_mode
+                                            filter_mode, # mipmapFilterMode::CUfilter_mode
                                             0, # mipmapLevelBias::Cfloat
                                             0, # minMipmapLevelClamp::Cfloat
                                             0, # maxMipmapLevelClamp::Cfloat
@@ -73,14 +88,14 @@ function _construct_CUDA_RESOURCE_DESC(texarr::CuTextureArray{T,N}) where {T,N}
 end
 
 function _construct_CUDA_RESOURCE_DESC(arr::CuArray{T,N}) where {T,N}
-# TODO: take care of allowed pitches
+    # TODO: take care of allowed pitches
     @assert 1 <= N <= 2 "Only 1D or 2D (dimension) CuArray objects can be wrapped in a texture"
     
     Ta = cuda_texture_alias_type(T)
     _assert_alias_size(T, Ta)
     nchan, format, Te = _alias_type_to_nchan_and_format(Ta)
 
-# #### TODO: use CUDAdrv wrapped struct when its padding becomes fixed
+    # #### TODO: use CUDAdrv wrapped struct when its padding becomes fixed
     resDesc_ref = Ref(((N == 1 ? CU_RESOURCE_TYPE_LINEAR : CU_RESOURCE_TYPE_PITCH2D), # resType::CUresourcetype
                         arr.buf.ptr, # 1 x UInt64 (CUdeviceptr)
                         format, # 1/2 x UInt64 (CUarray_format)
@@ -102,11 +117,19 @@ function unsafe_free!(t::CuTexture)
 end
 
 
-CuTexture(texarr::CuTextureArray{T,N}) where {T,N} = CuTexture{T,N,CuTextureArray{T,N}}(texarr)
-CuTexture{T}(n::Int) where {T} = CuTexture(CuTextureArray{T,1}((n,)))
-CuTexture{T}(nx::Int, ny::Int) where {T} = CuTexture(CuTextureArray{T,2}((nx, ny)))
-CuTexture{T}(nx::Int, ny::Int, nz::Int) where {T} = CuTexture(CuTextureArray{T,3}((nx, ny, nz)))
-CuTexture(cuarr::CuArray{T,N}) where {T,N} = CuTexture{T,N,CuArray{T,N}}(cuarr)
+@inline function CuTexture{T,N,Mem}(texmemory::Mem;
+                            address_mode::AddressMode = mode_clamp,
+                            address_modes::NTuple{N,AddressMode} = ntuple(_->address_mode, N),
+                            normalized_coordinates::Bool = true,
+                            filter_mode::FilterMode = mode_linear
+                            ) where {T,N,Mem}
+    CuTexture{T,N,Mem}(texmemory, address_modes, normalized_coordinates, filter_mode)
+end
+CuTexture(texarr::CuTextureArray{T,N}; kwargs...) where {T,N} = CuTexture{T,N,CuTextureArray{T,N}}(texarr; kwargs...)
+CuTexture{T}(n::Int; kwargs...) where {T} = CuTexture(CuTextureArray{T,1}((n,)); kwargs...)
+CuTexture{T}(nx::Int, ny::Int; kwargs...) where {T} = CuTexture(CuTextureArray{T,2}((nx, ny)); kwargs...)
+CuTexture{T}(nx::Int, ny::Int, nz::Int; kwargs...) where {T} = CuTexture(CuTextureArray{T,3}((nx, ny, nz)); kwargs...)
+CuTexture(cuarr::CuArray{T,N}; kwargs...) where {T,N} = CuTexture{T,N,CuArray{T,N}}(cuarr; kwargs...)
 
 
 Base.eltype(tm::CuTexture{T,N}) where {T,N} = T
