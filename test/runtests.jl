@@ -8,24 +8,23 @@ using Test
 
 @inline function calcpoint(blockIdx, blockDim, threadIdx, size)
     i = (blockIdx - 1) * blockDim + threadIdx
-    x = (Float32(i) - 0.5f0) / Float32(size)
-    return i, x
+    return i, Float32(i)
 end
-function kernel_texture_warp_native(dst::CuDeviceArray{T,1}, texture::CuDeviceTexture{T,1}, h) where {T}
-    i, u = calcpoint(blockIdx().x, blockDim().x, threadIdx().x, h)
+function kernel_texture_warp_native(dst::CuDeviceArray{T,1}, texture::CuDeviceTexture{T,1}) where {T}
+    i, u = calcpoint(blockIdx().x, blockDim().x, threadIdx().x, size(dst)[1])
     @inbounds dst[i] = texture[u];
     return nothing
 end
-function kernel_texture_warp_native(dst::CuDeviceArray{T,2}, texture::CuDeviceTexture{T,2}, h, w) where {T}
-    i, u = calcpoint(blockIdx().x, blockDim().x, threadIdx().x, h)
-    j, v = calcpoint(blockIdx().y, blockDim().y, threadIdx().y, w)
+function kernel_texture_warp_native(dst::CuDeviceArray{T,2}, texture::CuDeviceTexture{T,2}) where {T}
+    i, u = calcpoint(blockIdx().x, blockDim().x, threadIdx().x, size(dst)[1])
+    j, v = calcpoint(blockIdx().y, blockDim().y, threadIdx().y, size(dst)[2])
     @inbounds dst[i,j] = texture[u,v];
     return nothing
 end
-function kernel_texture_warp_native(dst::CuDeviceArray{T,3}, texture::CuDeviceTexture{T,3}, h, w, d) where {T}
-    i, u = calcpoint(blockIdx().x, blockDim().x, threadIdx().x, h)
-    j, v = calcpoint(blockIdx().y, blockDim().y, threadIdx().y, w)
-    k, w = calcpoint(blockIdx().z, blockDim().z, threadIdx().z, d)
+function kernel_texture_warp_native(dst::CuDeviceArray{T,3}, texture::CuDeviceTexture{T,3}) where {T}
+    i, u = calcpoint(blockIdx().x, blockDim().x, threadIdx().x, size(dst)[1])
+    j, v = calcpoint(blockIdx().y, blockDim().y, threadIdx().y, size(dst)[2])
+    k, w = calcpoint(blockIdx().z, blockDim().z, threadIdx().z, size(dst)[3])
     @inbounds dst[i,j,k] = texture[u,v,w];
     return nothing
 end
@@ -33,9 +32,9 @@ end
 function fetch_all(texture)
     dims = size(texture)
     d_out = CuArray{eltype(texture)}(undef, dims...)
-    # @device_code_warntype @cuda threads = dims kernel_texture_warp_native(d_out, texture, Float32.(dims)...)
-    # @device_code_llvm @cuda threads = dims kernel_texture_warp_native(d_out, texture, Float32.(dims)...)
-    @cuda threads = dims kernel_texture_warp_native(d_out, texture, Float32.(dims)...)
+    # @device_code_warntype @cuda threads = dims kernel_texture_warp_native(d_out, texture)
+    # @device_code_llvm @cuda threads = dims kernel_texture_warp_native(d_out, texture)
+    @cuda threads = dims kernel_texture_warp_native(d_out, texture)
     d_out
 end
 
@@ -202,4 +201,27 @@ end
 
         @test fetch_all(tex2D) == d_a2D
     end
+end
+
+
+@testset "Access by normalized coordinates" begin
+    testheight, testwidth, testdepth = 16, 16, 4
+    a2D = convert(Array{Float32}, repeat(1:testheight, 1, testwidth) + repeat(0.01 * (1:testwidth)', testheight, 1))
+    d_a2D = CuArray(a2D)
+
+    tex2D = CuTexture{Float32}(testheight, testwidth)
+    copyto!(tex2D.mem, d_a2D)
+
+    function kernel_texture_warp_native_normalized(dst::CuDeviceArray{T,2}, texture::CuDeviceTexture{T,2}) where {T}
+        i, u = calcpoint(blockIdx().x, blockDim().x, threadIdx().x, size(dst)[1])
+        j, v = calcpoint(blockIdx().y, blockDim().y, threadIdx().y, size(dst)[2])
+        x = (u - 0.5f0) / Float32(size(dst)[1])
+        y = (v - 0.5f0) / Float32(size(dst)[2])
+        @inbounds dst[i,j] = texture(x,y); # Access by normalized coordinates
+        return nothing
+    end
+    d_out = CuArray{eltype(tex2D)}(undef, size(tex2D))
+    @cuda threads = size(d_out) kernel_texture_warp_native_normalized(d_out, tex2D)
+
+    @test d_out == d_a2D
 end

@@ -4,9 +4,10 @@ Textures are fetched through indexing operations on `CuTexture`/`CuDeviceTexture
 """
 struct CuDeviceTexture{T,N}
     handle::CUtexObject
+    dims::Dims{N}
 end
 
-Adapt.adapt_storage(::CUDAnative.Adaptor, t::CuTexture{T,N}) where {T,N} = CuDeviceTexture{T,N}(t.handle)
+Adapt.adapt_storage(::CUDAnative.Adaptor, t::CuTexture{T,N}) where {T,N} = CuDeviceTexture{T,N}(t.handle, size(t.mem))
 
 
 @inline function tex1d(texObject::Int64, x::Float32)::Tuple{Int32,Int32,Int32,Int32}
@@ -27,9 +28,9 @@ end
         Tuple{Int32,Int32,Int32,Int32},
         Tuple{Int64,Float32,Float32,Float32}, texObject, x, y, z)
 end
-@inline texXD(t::CuDeviceTexture{T,1} where T, x::Real)::Tuple{Int32,Int32,Int32,Int32} = tex1d(reinterpret(Int64, t.handle), convert(Float32, x))
-@inline texXD(t::CuDeviceTexture{T,2} where T, x::Real, y::Real)::Tuple{Int32,Int32,Int32,Int32} = tex2d(reinterpret(Int64, t.handle), convert(Float32, x), convert(Float32, y))
-@inline texXD(t::CuDeviceTexture{T,3} where T, x::Real, y::Real, z::Real)::Tuple{Int32,Int32,Int32,Int32} = tex3d(reinterpret(Int64, t.handle), convert(Float32, x), convert(Float32, y), convert(Float32, z))
+@inline texXD(t::CuDeviceTexture{<:Any,1}, x::Real)::Tuple{Int32,Int32,Int32,Int32} = tex1d(reinterpret(Int64, t.handle), convert(Float32, x))
+@inline texXD(t::CuDeviceTexture{<:Any,2}, x::Real, y::Real)::Tuple{Int32,Int32,Int32,Int32} = tex2d(reinterpret(Int64, t.handle), convert(Float32, x), convert(Float32, y))
+@inline texXD(t::CuDeviceTexture{<:Any,3}, x::Real, y::Real, z::Real)::Tuple{Int32,Int32,Int32,Int32} = tex3d(reinterpret(Int64, t.handle), convert(Float32, x), convert(Float32, y), convert(Float32, z))
 
 
 @inline reconstruct(::Type{T}, x::Int32) where {T <: Union{Int32,UInt32,Int16,UInt16,Int8,UInt8}} = unsafe_trunc(T, x)
@@ -49,12 +50,18 @@ end
     return unsafe_load(Ptr{T}(pointer_from_objref(Ref(x))))
 end
 
-@inline function _getindex(t::CuDeviceTexture{T,N}, idcs::NTuple{Ni,Real}) where {T,N,Ni}
+@inline function _fetch(t::CuDeviceTexture{T}, idcs::NTuple{<:Any,Real}) where {T}
     i32_x4 = texXD(t, idcs...)
     Ta = cuda_texture_alias_type(T)
     cast(T, reconstruct(Ta, i32_x4))
 end
 
-@inline Base.getindex(t::CuDeviceTexture{T,1}, x::R) where {T,R <: Real} = _getindex(t, (x,))
-@inline Base.getindex(t::CuDeviceTexture{T,2}, x::R, y::R) where {T,R <: Real} = _getindex(t, (x, y))
-@inline Base.getindex(t::CuDeviceTexture{T,3}, x::R, y::R, z::R) where {T,R <: Real} = _getindex(t, (x, y, z))
+@inline _expand(x, n) = x * n
+@inline (t::CuDeviceTexture{T,1})(x::R) where {T,R <: Real} = _fetch(t, _expand.((x,), t.dims))
+@inline (t::CuDeviceTexture{T,2})(x::R, y::R) where {T,R <: Real} = _fetch(t, _expand.((x, y), t.dims))
+@inline (t::CuDeviceTexture{T,3})(x::R, y::R, z::R) where {T,R <: Real} = _fetch(t, _expand.((x, y, z), t.dims))
+
+@inline _offset(x) = x - 0.5f0
+@inline Base.getindex(t::CuDeviceTexture{T,1}, x::R) where {T,R <: Real} = _fetch(t, _offset.((x,)))
+@inline Base.getindex(t::CuDeviceTexture{T,2}, x::R, y::R) where {T,R <: Real} = _fetch(t, _offset.((x, y)))
+@inline Base.getindex(t::CuDeviceTexture{T,3}, x::R, y::R, z::R) where {T,R <: Real} = _fetch(t, _offset.((x, y, z)))

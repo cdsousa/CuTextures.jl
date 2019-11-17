@@ -22,9 +22,6 @@ CUDA textures elements are limited to a set of supported primitive types: `Float
 
 - Assert good alignment when wrapping `CuArray`s.
 - Deal with CUDA contexts.
-- Add support to choose non-normalized coordinate access instead of normalized access.
-- Add support to choose texture nearest-neighbor interpolation instead of linear interpolation.
-- Add support to choose texture address mode: clamp, border, etc., along with support to define the out-of-bounds value.
 - Improve code using wrapped CUDA drive API C structures.
 - Check potential performance optimizations
 - Check potential better (more optimized) ways to wrap fetch intrinsics (currently relying on `llvm.nvvm`)
@@ -55,7 +52,7 @@ function warp(dst, texture)
     v = (Float32(j) - 1f0) / (Float32(size(dst, 2)) - 1f0)
     x = u + 0.02f0 * CUDAnative.sin(30v)
     y = v + 0.03f0 * CUDAnative.sin(20u)
-    @inbounds dst[i,j] = texture[x,y]
+    @inbounds dst[i,j] = texture(x,y)
     return nothing
 end
 

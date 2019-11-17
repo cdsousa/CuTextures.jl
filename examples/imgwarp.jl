@@ -19,7 +19,7 @@ function warp(dst, texture)
     v = (Float32(j) - 1f0) / (Float32(size(dst, 2)) - 1f0)
     x = u + 0.02f0 * CUDAnative.sin(30v)
     y = v + 0.03f0 * CUDAnative.sin(20u)
-    @inbounds dst[i,j] = texture[x,y]
+    @inbounds dst[i,j] = texture(x,y)
     return nothing
 end
 

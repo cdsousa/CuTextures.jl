@@ -36,7 +36,6 @@ mutable struct CuTexture{T,N,Mem}
     
     function CuTexture{T,N,Mem}(texmemory::Mem,
                                 address_modes::NTuple{N,AddressMode},
-                                normalized_coordinates::Bool,
                                 filter_mode::FilterMode) where {T,N,Mem}
 
         Ta = cuda_texture_alias_type(T)
@@ -48,7 +47,7 @@ mutable struct CuTexture{T,N,Mem}
 
         address_modes = tuple(address_modes..., ntuple(_->mode_clamp, 3 - N)...)
         filter_mode = filter_mode
-        flags = (normalized_coordinates ? CU_TRSF_NORMALIZED_COORDINATES : zero(CU_TRSF_NORMALIZED_COORDINATES))
+        flags = zero(CU_TRSF_NORMALIZED_COORDINATES)  # use absolute (non-normalized) coordinates
         flags = flags | (Te <: Integer ? CU_TRSF_READ_AS_INTEGER : zero(CU_TRSF_READ_AS_INTEGER))
 
         texDesc_ref = Ref(CUDA_TEXTURE_DESC(address_modes, # addressMode::NTuple{3, CUaddress_mode}
@@ -120,10 +119,9 @@ end
 @inline function CuTexture{T,N,Mem}(texmemory::Mem;
                             address_mode::AddressMode = mode_clamp,
                             address_modes::NTuple{N,AddressMode} = ntuple(_->address_mode, N),
-                            normalized_coordinates::Bool = true,
                             filter_mode::FilterMode = mode_linear
                             ) where {T,N,Mem}
-    CuTexture{T,N,Mem}(texmemory, address_modes, normalized_coordinates, filter_mode)
+    CuTexture{T,N,Mem}(texmemory, address_modes, filter_mode)
 end
 CuTexture(texarr::CuTextureArray{T,N}; kwargs...) where {T,N} = CuTexture{T,N,CuTextureArray{T,N}}(texarr; kwargs...)
 CuTexture{T}(n::Int; kwargs...) where {T} = CuTexture(CuTextureArray{T,1}((n,)); kwargs...)
