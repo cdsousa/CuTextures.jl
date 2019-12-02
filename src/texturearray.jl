@@ -81,7 +81,7 @@ Base.size(tm::CuTextureArray) = tm.dims
 function Base.copyto!(dst::CuTextureArray{T,1}, src::Union{Array{T,1}, CuArray{T,1}}) where {T}
     @assert dst.dims == size(src) "CuTextureArray and CuArray sizes must match"
     if isa(src, CuArray)
-        cuMemcpyDtoA(dst.handle, src.offset, src.buf.ptr, dst.dims[1] * sizeof(T))
+        cuMemcpyDtoA(dst.handle, 0, src.ptr, dst.dims[1] * sizeof(T))
     else
         cuMemcpyHtoA(dst.handle, 0, pointer(src), dst.dims[1] * sizeof(T))
     end
@@ -95,7 +95,7 @@ function Base.copyto!(dst::CuTextureArray{T,2}, src::Union{Array{T,2}, CuArray{T
         0, # srcY::Csize_t
         isdevmem ? CUDAdrv.CU_MEMORYTYPE_DEVICE : CUDAdrv.CU_MEMORYTYPE_HOST, # srcMemoryType::CUmemorytype
         isdevmem ? 0 : pointer(src), # srcHost::Ptr{Cvoid}
-        isdevmem ? view(src.buf, src.offset) : 0, # srcDevice::CUdeviceptr
+        isdevmem ? pointer(src) : 0, # srcDevice::CUdeviceptr
         0, # srcArray::CUarray
         0, # srcPitch::Csize_t ### TODO: check why this cannot be `size(src.dims, 1) * sizeof(T)` as it should
         0, # dstXInBytes::Csize_t
@@ -121,7 +121,7 @@ function Base.copyto!(dst::CuTextureArray{T,3}, src::Union{Array{T,3}, CuArray{T
         0, # srcLOD::Csize_t
         isdevmem ? CUDAdrv.CU_MEMORYTYPE_DEVICE : CUDAdrv.CU_MEMORYTYPE_HOST, # srcMemoryType::CUmemorytype
         isdevmem ? 0 : pointer(src), # srcHost::Ptr{Cvoid}
-        isdevmem ? view(src.buf, src.offset) : 0, # srcDevice::CUdeviceptr
+        isdevmem ? pointer(src) : 0, # srcDevice::CUdeviceptr
         0, # srcArray::CUarray
         0, # reserved0::Ptr{Cvoid}
         size(src, 1) * sizeof(T), # srcPitch::Csize_t

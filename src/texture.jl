@@ -96,7 +96,7 @@ function _construct_CUDA_RESOURCE_DESC(arr::CuArray{T,N}) where {T,N}
 
     # #### TODO: use CUDAdrv wrapped struct when its padding becomes fixed
     resDesc_ref = Ref(((N == 1 ? CU_RESOURCE_TYPE_LINEAR : CU_RESOURCE_TYPE_PITCH2D), # resType::CUresourcetype
-                        arr.buf.ptr, # 1 x UInt64 (CUdeviceptr)
+                        pointer(arr), # 1 x UInt64 (CUdeviceptr)
                         format, # 1/2 x UInt64 (CUarray_format)
                         UInt32(nchan), # 1/2 x UInt64
                         (N == 2 ? size(arr, 1) : size(arr, 1) * sizeof(T)), # 1 x UInt64 nx
