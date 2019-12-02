@@ -63,3 +63,12 @@ end
     in(N, (1, 2, 4)) || return :(@error $(err * " Incompatible number of elements ($N, but only 1, 2 or 4 supported)."))
     return Ta                                
 end
+
+
+# Type reinterpretation utils
+
+
+@inline function cast(::Type{T}, x) where {T}
+    @assert sizeof(T) == sizeof(x)
+    return unsafe_load(Ptr{T}(pointer_from_objref(Ref(x))))
+end

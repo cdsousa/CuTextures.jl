@@ -36,6 +36,7 @@ mutable struct CuTexture{T,N,Mem}
     
     function CuTexture{T,N,Mem}(texmemory::Mem,
                                 address_modes::NTuple{N,AddressMode},
+                                border_value::T,
                                 filter_mode::FilterMode) where {T,N,Mem}
 
         Ta = cuda_texture_alias_type(T)
@@ -49,6 +50,12 @@ mutable struct CuTexture{T,N,Mem}
         filter_mode = filter_mode
         flags = zero(CU_TRSF_NORMALIZED_COORDINATES)  # use absolute (non-normalized) coordinates
         flags = flags | (Te <: Integer ? CU_TRSF_READ_AS_INTEGER : zero(CU_TRSF_READ_AS_INTEGER))
+        
+        border_value = cast(NTuple{nchan, Te}, border_value)
+        border_value_f32_x4 = Ref(ntuple(_->zero(Cfloat), 4))
+        for i=1:nchan
+            unsafe_store!( Ptr{Te}(pointer_from_objref(border_value_f32_x4)) + 4(i-1), border_value[i])
+        end
 
         texDesc_ref = Ref(CUDA_TEXTURE_DESC(address_modes, # addressMode::NTuple{3, CUaddress_mode}
                                             filter_mode, # filterMode::CUfilter_mode
@@ -58,7 +65,7 @@ mutable struct CuTexture{T,N,Mem}
                                             0, # mipmapLevelBias::Cfloat
                                             0, # minMipmapLevelClamp::Cfloat
                                             0, # maxMipmapLevelClamp::Cfloat
-                                            ntuple(_->Cfloat(zero(Te)), 4), # borderColor::NTuple{4, Cfloat}
+                                            border_value_f32_x4[], # borderColor::NTuple{4, Cfloat}
                                             ntuple(_->Cint(0), 12)))
 
         texObject_ref = Ref{CUtexObject}(0)
@@ -119,9 +126,10 @@ end
 @inline function CuTexture{T,N,Mem}(texmemory::Mem;
                             address_mode::AddressMode = mode_clamp,
                             address_modes::NTuple{N,AddressMode} = ntuple(_->address_mode, N),
+                            border_value::T = cast(T, ntuple(_->zero(UInt8), sizeof(T))),
                             filter_mode::FilterMode = mode_linear
                             ) where {T,N,Mem}
-    CuTexture{T,N,Mem}(texmemory, address_modes, filter_mode)
+    CuTexture{T,N,Mem}(texmemory, address_modes, border_value, filter_mode)
 end
 CuTexture(texarr::CuTextureArray{T,N}; kwargs...) where {T,N} = CuTexture{T,N,CuTextureArray{T,N}}(texarr; kwargs...)
 CuTexture{T}(n::Int; kwargs...) where {T} = CuTexture(CuTextureArray{T,1}((n,)); kwargs...)

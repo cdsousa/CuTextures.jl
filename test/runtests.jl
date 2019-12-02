@@ -225,3 +225,33 @@ end
 
     @test d_out == d_a2D
 end
+
+
+@testset "Out of bounds fetches" begin
+    testheight, testwidth, testdepth = 16, 16, 4
+    a2D = convert(Array{Float32}, repeat(1:testheight, 1, testwidth) + repeat(0.01 * (1:testwidth)', testheight, 1))
+    d_a2D = CuArray(a2D)
+    border = 8.88f0
+
+    tex_clamp = CuTexture(d_a2D)
+    tex_border = CuTexture(d_a2D, address_mode=mode_border)
+    tex_border_custom = CuTexture(d_a2D, address_mode=mode_border, border_value=border)
+
+    function kernel_texture_single_fetch(dst::CuDeviceArray{T,1}, texture::CuDeviceTexture{T,2}, i, j) where {T}
+        @inbounds dst[1] = texture[i,j];
+        return nothing
+    end
+    d_out = CuArray([1.2345f0])
+
+    @cuda threads = 1 kernel_texture_single_fetch(d_out, tex_clamp, 10.0f0, 20.0f0)
+    @test Array(d_out)[1] == a2D[10, 16]
+    @cuda threads = 1 kernel_texture_single_fetch(d_out, tex_clamp, -1.0f0, 10.0f0)
+    @test Array(d_out)[1] == a2D[1, 10]
+    @cuda threads = 1 kernel_texture_single_fetch(d_out, tex_border, 20.0f0, 20.0f0)
+    @test Array(d_out)[1] == 0.0f0
+
+    # Although there is a filed to set border value in the texture description struct,
+    #  that is not included in the CUDA Driver API documentation and does not works at all.
+    @cuda threads = 1 kernel_texture_single_fetch(d_out, tex_border_custom, 20.0f0, 20.0f0)
+    @test Array(d_out)[1] == border
+end

@@ -37,23 +37,18 @@ end
 @inline reconstruct(::Type{Float32}, x::Int32) = reinterpret(Float32, x)
 @inline reconstruct(::Type{Float16}, x::Int32) = convert(Float16, reinterpret(Float32, x))
 
-@inline reconstruct(::Type{T}, i32_x4::NTuple{4,Int32}) where T = reconstruct(T, i32_x4[1])
-@inline reconstruct(::Type{NTuple{2,T}}, i32_x4::NTuple{4,Int32}) where T = (reconstruct(T, i32_x4[1]),
-                                                                             reconstruct(T, i32_x4[2]))
-@inline reconstruct(::Type{NTuple{4,T}}, i32_x4::NTuple{4,Int32}) where T = (reconstruct(T, i32_x4[1]),
-                                                                             reconstruct(T, i32_x4[2]),
-                                                                             reconstruct(T, i32_x4[3]),
-                                                                             reconstruct(T, i32_x4[4]))
-
-@inline function cast(::Type{T}, x) where {T}
-    @assert sizeof(T) == sizeof(x)
-    return unsafe_load(Ptr{T}(pointer_from_objref(Ref(x))))
-end
+@inline reconstruct(::Type{T}, i32_x4_val::NTuple{4,Int32}) where T = reconstruct(T, i32_x4_val[1])
+@inline reconstruct(::Type{NTuple{2,T}}, i32_x4_val::NTuple{4,Int32}) where T = (reconstruct(T, i32_x4_val[1]),
+                                                                                 reconstruct(T, i32_x4_val[2]))
+@inline reconstruct(::Type{NTuple{4,T}}, i32_x4_val::NTuple{4,Int32}) where T = (reconstruct(T, i32_x4_val[1]),
+                                                                                 reconstruct(T, i32_x4_val[2]),
+                                                                                 reconstruct(T, i32_x4_val[3]),
+                                                                                 reconstruct(T, i32_x4_val[4]))
 
 @inline function _fetch(t::CuDeviceTexture{T}, idcs::NTuple{<:Any,Real}) where {T}
-    i32_x4 = texXD(t, idcs...)
+    i32_x4_val = texXD(t, idcs...)
     Ta = cuda_texture_alias_type(T)
-    cast(T, reconstruct(Ta, i32_x4))
+    cast(T, reconstruct(Ta, i32_x4_val))
 end
 
 @inline _expand(x, n) = x * n
