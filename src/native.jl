@@ -47,7 +47,10 @@ end
 
 @inline function cast(::Type{T}, x) where {T}
     @assert sizeof(T) == sizeof(x)
-    return unsafe_load(Ptr{T}(pointer_from_objref(Ref(x))))
+    r = Ref(x)
+    GC.@preserve r begin
+       unsafe_load(convert(Ptr{T}, Base.unsafe_convert(Ptr{Cvoid}, r)))
+    end
 end
 
 @inline function _fetch(t::CuDeviceTexture{T}, idcs::NTuple{<:Any,Real}) where {T}
