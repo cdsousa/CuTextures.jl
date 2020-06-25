@@ -1,6 +1,8 @@
 # CuTextures
 
-**CUDA textures ("CUDA arrays") interface for native Julia**
+**DPRECATED: This packaged was improved and merged into [CUDA.jl](https://github.com/JuliaGPU/CUDA.jl)**
+
+*CUDA textures ("CUDA arrays") interface for native Julia*
 
 CUDA Textures are handled though two main types, `CuTextureArray` and `CuTexture`.
 
